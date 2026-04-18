@@ -1,0 +1,34 @@
+[package]
+name = "prism-fuzz"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+clash-prism-core = { path = "../crates/clash-prism-core" }
+clash-prism-dsl = { path = "../crates/clash-prism-dsl" }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+
+# Fuzzing engine
+libfuzzer-sys = { version = "0.4", features = ["rustc-dep-of-std"] }
+
+# Prevent cargo from optimizing out the fuzz target
+[[bin]]
+name = "fuzz_dsl_parser"
+path = "fuzz_targets/fuzz_dsl_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_expr_evaluator"
+path = "fuzz_targets/fuzz_expr_evaluator.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_yaml_roundtrip"
+path = "fuzz_targets/fuzz_yaml_roundtrip.rs"
+test = false
+doc = false

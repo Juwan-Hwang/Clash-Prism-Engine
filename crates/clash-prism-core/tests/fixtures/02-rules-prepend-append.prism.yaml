@@ -1,0 +1,10 @@
+# ═══════════════════════════════════════════════════════════
+# 测试 Fixture: 规则操作（$prepend + $append 组合）
+# ═══════════════════════════════════════════════════════════
+rules:
+  $prepend:
+    - DOMAIN-SUFFIX,ads.com,REJECT
+    - DOMAIN-KEYWORD,telemetry,REJECT
+  $append:
+    - GEOIP,CN,DIRECT
+    - MATCH,PROXY

@@ -1,0 +1,25 @@
+[package]
+name = "clash-prism-extension"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "UI Extension interface for integrating Prism Engine into Mihomo GUI clients"
+license = "Apache-2.0"
+authors = ["Juwan Hwang (黄治文)"]
+
+[dependencies]
+clash-prism-core = { version = "0.1.0" }
+clash-prism-dsl = { version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+notify = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+default = []
+watcher = ["clash-prism-core/watcher", "notify"]

@@ -1,0 +1,7 @@
+# ═══════════════════════════════════════════════════════════
+# 测试 Fixture: 代理节点操作（$filter + $transform + $remove）
+# ═══════════════════════════════════════════════════════════
+proxies:
+  $filter: "p.name.includes('香港') || p.name.includes('HK')"
+  $remove: "p.name.includes('过期') || p.name.includes('测试')"
+  $transform: "({...p, name: '🇭🇰 ' + p.name})"

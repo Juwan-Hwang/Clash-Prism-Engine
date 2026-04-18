@@ -1,0 +1,9 @@
+# ═══════════════════════════════════════════════════════════
+# 测试 Fixture: TUN 配置（$override 独占操作）
+# ═══════════════════════════════════════════════════════════
+tun:
+  $override:
+    enable: true
+    stack: mixed
+    auto-route: true
+    auto-detect-interface: true

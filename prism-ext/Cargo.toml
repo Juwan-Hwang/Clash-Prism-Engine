@@ -1,0 +1,14 @@
+[package]
+name = "clash-prism-ext"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "CLI scaffolding tool for Prism Engine UI Extension integration"
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "clash-prism-ext"
+path = "src/main.rs"
+
+[dependencies]

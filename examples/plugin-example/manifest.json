@@ -1,0 +1,17 @@
+{
+    "id": "smart-grouping",
+    "name": "智能分组",
+    "version": "1.2.0",
+    "type": "config",
+    "permissions": [
+        "config:read",
+        "config:write",
+        "store:readwrite"
+    ],
+    "hooks": ["onSubscribeParsed"],
+    "entry": "main.js",
+    "scope": "subscribe",
+    "timeout": 5000,
+    "author": "Prism Team",
+    "description": "按地区自动分组代理节点，添加国旗前缀，创建 url-test 自动选择组"
+}

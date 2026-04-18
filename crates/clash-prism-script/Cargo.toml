@@ -1,0 +1,25 @@
+[package]
+name = "clash-prism-script"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+persist-store = ["dep:redb"]
+
+[dependencies]
+clash-prism-core = { version = "0.1.0" }
+rquickjs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+rand = { workspace = true }
+glob-match = { workspace = true }
+redb = { version = "1.5", optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

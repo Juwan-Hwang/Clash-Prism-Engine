@@ -1,0 +1,32 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Env
+.env
+.env.local
+
+# Build
+build/
+dist/
+
+# Fuzz corpus
+fuzz/corpus/
+fuzz/crashes/
+fuzz/bugs/
+
+# Logs
+*.log

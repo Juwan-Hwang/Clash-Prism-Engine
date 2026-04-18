@@ -1,0 +1,11 @@
+# ═══════════════════════════════════════════════════════════
+# 测试 Fixture: $default 默认值注入
+# ═══════════════════════════════════════════════════════════
+dns:
+  $default:
+    enhanced-mode: fake-ip
+    fake-ip-filter:
+      - "+.lan"
+      - "+.local"
+      - "*.microsoft.com"
+      - "*.apple.com"

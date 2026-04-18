@@ -1,0 +1,45 @@
+[package]
+name = "clash-prism-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+http-reload = ["ureq"]
+watcher = ["notify", "ctrlc"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+indexmap = { workspace = true }
+hashbrown = { workspace = true }
+unicode-normalization = "0.1"
+sha2 = { workspace = true }
+# Replaced reqwest::blocking with ureq to avoid blocking the tokio
+# async runtime. ureq is a pure-Rust synchronous HTTP client with no async
+# dependency, making it safe to call from any context without risking
+# tokio thread starvation.
+ureq = { version = "2", optional = true }
+notify = { workspace = true, optional = true }
+ctrlc = { version = "3", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+clash-prism-dsl = { path = "../clash-prism-dsl" }
+clash-prism-script = { path = "../clash-prism-script" }
+criterion = { workspace = true }
+
+[[bench]]
+name = "prism_benchmarks"
+harness = false
+path = "benches/prism_benchmarks.rs"

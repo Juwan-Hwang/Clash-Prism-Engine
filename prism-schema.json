@@ -1,0 +1,303 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://prism-engine.dev/schema/prism-dsl.json",
+  "x-prism-version": "0.1.0",
+  "title": "Prism DSL",
+  "description": "Prism Engine 配置增强 DSL — .prism.yaml 文件格式规范 v0.1.0\n\n使用方式：在 .prism.yaml 文件头部添加:\n  # yaml-language-server: $schema=./prism-schema.json",
+  "$comment": "Prism Engine v0.1.0 — 2026-04-10",
+  "type": "object",
+  "properties": {
+    "__when__": {
+      "description": "条件作用域（仅当条件满足时生效）\n⚠️ 一个 .prism.yaml 文件只能有一个 __when__ 声明",
+      "type": "object",
+      "properties": {
+        "core": {
+          "description": "内核类型",
+          "type": "string",
+          "enum": [
+            "mihomo",
+            "clash-rs"
+          ],
+          "default": "mihomo"
+        },
+        "platform": {
+          "description": "操作系统（支持多选）",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "windows",
+                "macos",
+                "linux",
+                "android",
+                "ios"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "windows",
+                  "macos",
+                  "linux",
+                  "android",
+                  "ios"
+                ]
+              },
+              "uniqueItems": true
+            }
+          ]
+        },
+        "profile": {
+          "description": "Profile 名称（支持正则匹配）\n示例: \"/流媒体|解锁/\" 匹配包含「流媒体」或「解锁」的 Profile",
+          "type": "string"
+        },
+        "time": {
+          "description": "时间段（可选，格式: HH:mm-HH:mm）\n示例: \"08:00-23:00\"",
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+        },
+        "enabled": {
+          "description": "Enable/disable toggle. When false, the entire file is skipped.",
+          "type": "boolean"
+        },
+        "ssid": {
+          "description": "WiFi SSID condition. Only applies when connected to this SSID.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "__after__": {
+      "description": "依赖声明（确保此文件在指定目标之后执行）\n不再提供 __priority__，只用 __after__ 声明依赖。\n同级无依赖的文件按文件名字典序排列（确定性）。\n\n匹配规则：完整文件名或去掉 .prism.yaml 后缀的名称",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "单个依赖，如 \"base-dns\" 或 \"00-base-dns\""
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "多个依赖，按顺序执行"
+        }
+      ]
+    },
+    "dns": {
+      "$ref": "#/definitions/config_field"
+    },
+    "tun": {
+      "$ref": "#/definitions/config_field"
+    },
+    "rules": {
+      "$ref": "#/definitions/array_field"
+    },
+    "proxies": {
+      "$ref": "#/definitions/array_field"
+    },
+    "proxy-groups": {
+      "$ref": "#/definitions/array_field"
+    },
+    "proxy-providers": {
+      "$ref": "#/definitions/array_field"
+    },
+    "hosts": {
+      "$ref": "#/definitions/config_field"
+    },
+    "sniffer": {
+      "$ref": "#/definitions/config_field"
+    },
+    "authentication": {
+      "$ref": "#/definitions/config_field"
+    },
+    "tls": {
+      "$ref": "#/definitions/config_field"
+    },
+    "profile": {
+      "$ref": "#/definitions/config_field"
+    },
+    "experimental": {
+      "$ref": "#/definitions/config_field"
+    }
+  },
+  "additionalProperties": {
+    "oneOf": [
+      {
+        "$ref": "#/definitions/config_field"
+      },
+      {
+        "$ref": "#/definitions/array_field"
+      }
+    ]
+  },
+  "definitions": {
+    "config_field": {
+      "description": "字典类型配置字段\n支持三种操作模式:\n1. 直接写值 → 深度合并 (DeepMerge)\n2. $override → 强制覆盖（独占键）\n3. $default → 默认值注入（仅当字段不存在时设置）",
+      "oneOf": [
+        {
+          "description": "深度合并：递归合并子项（默认行为）",
+          "type": [
+            "object",
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "description": "强制覆盖：完全替换该字段，不递归合并（独占键，不可与其他操作混用）",
+          "type": "object",
+          "properties": {
+            "$override": {
+              "description": "覆盖内容",
+              "type": [
+                "object",
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "$override"
+          ],
+          "additionalProperties": false,
+          "not": {
+            "description": "$override 不能与任何其他键共存（additionalProperties: false 已保证，此处为显式声明）",
+            "propertyNames": {
+              "pattern": "^(?!\\$override$).+$"
+            },
+            "minProperties": 2
+          }
+        },
+        {
+          "description": "默认值注入：仅当字段不存在或为 null 时写入\n空数组 [] 和空字典 {} 不触发（它们是有效值）",
+          "type": "object",
+          "properties": {
+            "$default": {
+              "description": "默认值内容",
+              "type": [
+                "object",
+                "string",
+                "number",
+                "boolean",
+                "array",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "array_field": {
+      "description": "数组类型配置字段\n支持 5 种数组操作 + 深度合并:\n- $prepend: 前置插入\n- $append: 末尾追加\n- $filter: 条件过滤（仅限静态字段）\n- $transform: 映射变换（仅限静态字段）\n- $remove: 条件删除（仅限静态字段）\n\n固定执行顺序: $filter → $remove → $transform → $prepend → $append\n$prepend/$append 插入的元素不受 $filter 约束。",
+      "oneOf": [
+        {
+          "description": "深度合并：直接提供数组值进行合并",
+          "type": "array"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "$prepend": {
+              "description": "数组前置插入（支持条件规则对象）",
+              "type": "array",
+              "items": { "$ref": "#/definitions/conditional_rule_item" }
+            },
+            "$append": {
+              "description": "数组末尾追加（支持条件规则对象）",
+              "type": "array",
+              "items": { "$ref": "#/definitions/conditional_rule_item" }
+            },
+            "$filter": {
+              "description": "条件过滤 — 保留匹配元素（仅限静态字段）\n表达式中的 p 代表当前元素。\n\n可引用的静态字段: name, type, server, port, uuid, password, cipher,\ntls, sni, skip-cert-verify, fingerprint, alpn, network,\nws-opts, grpc-opts, h2-opts, reality-opts, flow, username, alterId, protocol\n\n⚠️ 引用运行时字段 (delay, latency, speed, loss_rate, success_rate)\n会在编译期报错。\n\n示例: \"p.name.includes('香港') || p.type === 'ss'\"",
+              "type": "string"
+            },
+            "$transform": {
+              "description": "映射变换 — 对每个元素应用变换（仅限静态字段）\n常用场景: 批量重命名、添加前缀等。\n\n⚠️ 注意使用 ...p 展开原始对象以保留必要字段！\n错误: ({ name: '新名称' }) — 会丢失 type/server/port 等字段\n正确: ({...p, name: '新名称'}) — 保留所有原始字段\n\n示例: \"{...p, name: '🇭🇰 ' + p.name}\"",
+              "type": "string"
+            },
+            "$remove": {
+              "description": "条件删除 — 删除匹配元素（仅限静态字段）\n示例: \"p.name.includes('过期') || p.name.includes('测试')\"",
+              "type": "string"
+            },
+            "$default": {
+              "description": "默认值注入 — 仅当数组不存在或为 null 时设置默认值",
+              "type": "array"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "conditional_rule_item": {
+      "description": "$prepend/$append 数组元素类型（纯字符串或条件规则对象）",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "__when__": {
+              "description": "规则级条件",
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "启用/禁用此规则"
+                },
+                "platform": {
+                  "description": "规则级平台条件",
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "windows",
+                        "macos",
+                        "linux",
+                        "android",
+                        "ios"
+                      ]
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux",
+                          "android",
+                          "ios"
+                        ]
+                      },
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "ssid": {
+                  "type": "string",
+                  "description": "WiFi SSID 条件"
+                }
+              }
+            },
+            "__rule__": {
+              "description": "规则内容（条件匹配时生效）",
+              "type": "string"
+            }
+          },
+          "required": [
+            "__when__",
+            "__rule__"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

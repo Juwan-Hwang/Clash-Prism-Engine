@@ -1,0 +1,14 @@
+# ═══════════════════════════════════════════════════════════
+# 测试 Fixture: 基础 DNS 配置（深度合并）
+# ═══════════════════════════════════════════════════════════
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  fake-ip-filter:
+    - "+.lan"
+    - "+.local"
+    - "*.server.com"

@@ -1,0 +1,20 @@
+[package]
+name = "clash-prism-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clash-prism-core = { version = "0.1.0" }
+clash-prism-script = { version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

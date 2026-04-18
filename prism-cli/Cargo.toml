@@ -1,0 +1,33 @@
+[package]
+name = "prism-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Prism Engine CLI — 配置变换引擎命令行工具"
+
+[[bin]]
+name = "prism-cli"
+path = "src/main.rs"
+
+[dependencies]
+clash-prism-core = { path = "../crates/clash-prism-core", features = ["watcher"] }
+clash-prism-dsl = { path = "../crates/clash-prism-dsl" }
+clash-prism-script = { path = "../crates/clash-prism-script" }
+clash-prism-plugin = { path = "../crates/clash-prism-plugin" }
+clash-prism-extension = { path = "../crates/clash-prism-extension", features = ["watcher"] }
+
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+# 允许补丁版本更新，避免过于严格的版本锁定
+clap = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# PID 文件锁：Unix 平台使用 libc::kill(pid, 0) 检测进程存活
+libc = "0.2"

@@ -1,0 +1,16 @@
+# ═══════════════════════════════════════════════════════════
+# 测试 Fixture: 条件作用域（__when__）
+# ═══════════════════════════════════════════════════════════
+__when__:
+  core: mihomo
+  platform: [macos, windows]
+  profile: /流媒体|解锁/
+
+rules:
+  $prepend:
+    - DOMAIN-SUFFIX,netflix.com,PROXY
+    - DOMAIN-SUFFIX,youtube.com,PROXY
+    - DOMAIN-SUFFIX,disneyplus.com,PROXY
+    - DOMAIN-SUFFIX,hbo.com,PROXY
+
+__after__: ["02-rules-prepend-append"]

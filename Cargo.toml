@@ -1,0 +1,121 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/clash-prism-core",
+    "crates/clash-prism-dsl",
+    "crates/clash-prism-script",
+    "crates/clash-prism-smart",
+    "crates/clash-prism-plugin",
+    "crates/clash-prism-extension",
+    "prism-cli",
+    "prism-ext",
+    # Fuzzing targets (not published, requires nightly + cargo-fuzz)
+    # Uncomment to include in workspace: "fuzz",
+]
+
+# Fuzzing and benchmarking are opt-in (not in workspace members).
+# Run with: cargo +nightly fuzz run fuzz_dsl_parser
+# Run with: cargo bench
+exclude = ["fuzz", "benches"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+authors = ["Juwan Hwang (黄治文)"]
+repository = "https://github.com/Juwan-Hwang/Clash-Prism-Engine"
+
+[workspace.dependencies]
+# Async runtime (minimal features: only what rquickjs actually needs)
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "io-util", "signal"] }
+
+# HTTP framework (prism-cli serve)
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+toml = "0.8"
+
+# Scripting engine
+# rquickjs 0.11 ships pre-generated bindings for all standard platforms
+# (Linux x86_64/aarch64, macOS, Windows). No bindgen or C build dependency.
+rquickjs = { version = "0.11", features = ["futures", "parallel"] }
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Identifiers (used by clash-prism-core IR and clash-prism-plugin)
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Regex
+regex = "1"
+
+# File system watching (§4.6: watch mode)
+notify = "6.1"
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# Hashing (used by clash-prism-core and clash-prism-plugin)
+sha2 = "0.10"
+
+# Random number generation (used by clash-prism-script API)
+rand = "0.8"
+
+# Glob pattern matching (used by clash-prism-script API)
+glob-match = "0.2"
+
+# Embedded KV database (§11: persist-store feature)
+# Note: redb is NOT declared as workspace dependency because workspace deps
+# cannot be optional. It is declared directly in clash-prism-script/Cargo.toml instead.
+# See: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#optional-dependencies
+
+# Testing
+tempfile = "3"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Ordering containers (compatible with Rust 2024 edition)
+indexmap = "2"
+hashbrown = "0.15"
+home = "0.5"
+
+# ─── Release Profile ──────────────────────────────────────
+[profile.release]
+# Link-Time Optimization: eliminates dead code across crate boundaries,
+# inlines cross-crate functions, and produces smaller, faster binaries.
+lto = "thin"
+# Single codegen unit: allows the optimizer to see the entire program
+# at once, enabling better inlining and dead-code elimination at the
+# cost of slower compile times (acceptable for release builds).
+codegen-units = 1
+# Strip debug symbols and similar metadata from the binary.
+strip = true
+# Optimize binary size in addition to speed (good for CLI tools).
+opt-level = 3
+# Abort on panic: produces smaller binaries by removing unwinding code.
+panic = "abort"
+
+# ─── Patch: Local Development Override ──────────────────────
+# When developing locally (git clone), these entries override the
+# crates.io version dependencies with local path dependencies.
+# `cargo publish` automatically ignores [patch] — no action needed.
+[patch.crates-io]
+clash-prism-core = { path = "crates/clash-prism-core" }
+clash-prism-dsl = { path = "crates/clash-prism-dsl" }
+clash-prism-script = { path = "crates/clash-prism-script" }
+clash-prism-smart = { path = "crates/clash-prism-smart" }
+clash-prism-plugin = { path = "crates/clash-prism-plugin" }
+clash-prism-extension = { path = "crates/clash-prism-extension" }

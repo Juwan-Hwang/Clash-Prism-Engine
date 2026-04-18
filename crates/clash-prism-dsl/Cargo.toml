@@ -1,0 +1,23 @@
+[package]
+name = "clash-prism-dsl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clash-prism-core = { version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+home = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "gen-schema"
+path = "src/bin/gen-schema.rs"
+doc = false
