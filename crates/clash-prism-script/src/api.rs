@@ -236,7 +236,10 @@ impl KvStore {
                 "KV 存储初始化为持久化模式 (redb) — 数据将跨进程重启保留"
             );
             Self {
-                inner: std::sync::Mutex::new(KvStoreInner::Persistent { db: Box::new(db), table_def }),
+                inner: std::sync::Mutex::new(KvStoreInner::Persistent {
+                    db: Box::new(db),
+                    table_def,
+                }),
             }
         }
 
@@ -647,10 +650,7 @@ impl PrismApi {
     /// - store（KV 存储）
     /// - env（环境信息只读）
     /// - log（日志）
-    pub fn register<'js>(
-        ctx: &Ctx<'js>,
-        cfg: RegisterConfig,
-    ) -> RjsResult<()> {
+    pub fn register<'js>(ctx: &Ctx<'js>, cfg: RegisterConfig) -> RjsResult<()> {
         let script_name = &cfg.script_name;
         let max_log_entries = cfg.max_log_entries;
         let config = cfg.config;
