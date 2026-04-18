@@ -21,7 +21,7 @@ exclude = ["fuzz", "benches"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "Apache-2.0"
 authors = ["Juwan Hwang (黄治文)"]
 repository = "https://github.com/Juwan-Hwang/Clash-Prism-Engine"
