@@ -72,32 +72,32 @@ impl TargetCompiler {
     ///
     /// Should be called once at startup.
     pub fn cleanup_stale_temp_files(target_path: &std::path::Path) {
-        if let Some(parent) = target_path.parent() {
-            if let Ok(entries) = std::fs::read_dir(parent) {
-                let file_name = target_path
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    // deleting unrelated files that happen to start with the same
-                    // name (e.g., "config.yaml.bak" would match the old loose check).
-                    // The exact temp file pattern is: "{target_filename}.prism.tmp.{uuid}"
-                    let expected_prefix = format!("{}.prism.tmp.", file_name);
-                    if name_str.starts_with(&expected_prefix) {
-                        if let Err(e) = std::fs::remove_file(entry.path()) {
-                            tracing::debug!(
-                                path = %entry.path().display(),
-                                error = %e,
-                                "Failed to clean up stale temp file"
-                            );
-                        } else {
-                            tracing::info!(
-                                path = %entry.path().display(),
-                                "Cleaned up stale temp file from previous crash"
-                            );
-                        }
+        if let Some(parent) = target_path.parent()
+            && let Ok(entries) = std::fs::read_dir(parent)
+        {
+            let file_name = target_path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                // deleting unrelated files that happen to start with the same
+                // name (e.g., "config.yaml.bak" would match the old loose check).
+                // The exact temp file pattern is: "{target_filename}.prism.tmp.{uuid}"
+                let expected_prefix = format!("{}.prism.tmp.", file_name);
+                if name_str.starts_with(&expected_prefix) {
+                    if let Err(e) = std::fs::remove_file(entry.path()) {
+                        tracing::debug!(
+                            path = %entry.path().display(),
+                            error = %e,
+                            "Failed to clean up stale temp file"
+                        );
+                    } else {
+                        tracing::info!(
+                            path = %entry.path().display(),
+                            "Cleaned up stale temp file from previous crash"
+                        );
                     }
                 }
             }
@@ -618,10 +618,10 @@ impl TargetCompiler {
         let parent_path = parts[..parts.len() - 1].join(".");
         let field_name = parts[parts.len() - 1];
 
-        if let Some(parent) = get_json_path_mut(config, &parent_path) {
-            if let Some(obj) = parent.as_object_mut() {
-                obj.remove(field_name);
-            }
+        if let Some(parent) = get_json_path_mut(config, &parent_path)
+            && let Some(obj) = parent.as_object_mut()
+        {
+            obj.remove(field_name);
         }
     }
 

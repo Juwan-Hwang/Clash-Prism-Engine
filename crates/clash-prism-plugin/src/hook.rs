@@ -107,12 +107,11 @@ impl Hook {
                     return true;
                 }
                 // `*/N` with N == 1 means every minute — high frequency
-                if let Some(step_str) = minute_field.strip_prefix("*/") {
-                    if let Ok(step) = step_str.parse::<u32>() {
-                        if step == 1 {
-                            return true;
-                        }
-                    }
+                if let Some(step_str) = minute_field.strip_prefix("*/")
+                    && let Ok(step) = step_str.parse::<u32>()
+                    && step == 1
+                {
+                    return true;
                 }
                 false
             }
@@ -460,14 +459,14 @@ fn matches_cron_part(part: &str, value: u32, valid_range: &std::ops::RangeInclus
     }
 
     // Step pattern: */N or 1-10/N
-    if let Some(rest) = part.strip_prefix("*/") {
-        if let Ok(step) = rest.parse::<u32>() {
-            if step == 0 {
-                return false;
-            }
-            let min = *valid_range.start();
-            return value >= min && (value - min) % step == 0;
+    if let Some(rest) = part.strip_prefix("*/")
+        && let Ok(step) = rest.parse::<u32>()
+    {
+        if step == 0 {
+            return false;
         }
+        let min = *valid_range.start();
+        return value >= min && (value - min).is_multiple_of(step);
     }
 
     // Range with optional step: 1-10 or 1-10/2
@@ -488,7 +487,7 @@ fn matches_cron_part(part: &str, value: u32, valid_range: &std::ops::RangeInclus
                 } else {
                     1
                 };
-                return value >= start && value <= end && (value - start) % step == 0;
+                return value >= start && value <= end && (value - start).is_multiple_of(step);
             }
         }
     }
@@ -620,13 +619,13 @@ impl HookScheduler {
         }
 
         for part in &parts {
-            if let Some(rest) = part.strip_prefix("*/") {
-                if rest.parse::<u32>() == Ok(0) {
-                    return Err(format!(
-                        "Cron 表达式「{}」无效：步长不能为 0（字段「{}」）",
-                        expr, part
-                    ));
-                }
+            if let Some(rest) = part.strip_prefix("*/")
+                && rest.parse::<u32>() == Ok(0)
+            {
+                return Err(format!(
+                    "Cron 表达式「{}」无效：步长不能为 0（字段「{}」）",
+                    expr, part
+                ));
             }
         }
 
@@ -652,10 +651,10 @@ impl HookScheduler {
             .filter(|h| {
                 // v2 optimization: Use next_trigger_time() to short-circuit
                 // hooks that definitely won't trigger at this time.
-                if let Some(next) = h.next_trigger_time(now - chrono::Duration::minutes(2)) {
-                    if next > now {
-                        return false;
-                    }
+                if let Some(next) = h.next_trigger_time(now - chrono::Duration::minutes(2))
+                    && next > now
+                {
+                    return false;
                 }
                 h.should_trigger_now(now)
             })

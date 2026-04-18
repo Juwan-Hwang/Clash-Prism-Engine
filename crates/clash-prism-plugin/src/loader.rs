@@ -610,36 +610,31 @@ var __prism_hook_result = undefined;
 /// - 月: 1-12
 /// - 周: 0-6
 fn is_valid_schedule_hook(hook_name: &str) -> bool {
-    if let Some(rest) = hook_name.strip_prefix("OnSchedule(") {
-        if let Some(inner) = rest.strip_suffix(')') {
-            // 只允许: 数字、字母、空格、逗号、连字符、星号、斜杠
-            if !inner.chars().all(|c| {
-                c.is_ascii_alphanumeric()
-                    || c == ' '
-                    || c == ','
-                    || c == '-'
-                    || c == '*'
-                    || c == '/'
-            }) {
-                return false;
-            }
-
-            let parts: Vec<&str> = inner.split_whitespace().collect();
-            if parts.len() != 5 {
-                return false;
-            }
-
-            // 每个字段的允许范围
-            let ranges: [(u32, u32); 5] = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)];
-
-            for (i, part) in parts.iter().enumerate() {
-                if !validate_cron_field_range(part, ranges[i].0, ranges[i].1) {
-                    return false;
-                }
-            }
-
-            return true;
+    if let Some(rest) = hook_name.strip_prefix("OnSchedule(")
+        && let Some(inner) = rest.strip_suffix(')')
+    {
+        // 只允许: 数字、字母、空格、逗号、连字符、星号、斜杠
+        if !inner.chars().all(|c| {
+            c.is_ascii_alphanumeric() || c == ' ' || c == ',' || c == '-' || c == '*' || c == '/'
+        }) {
+            return false;
         }
+
+        let parts: Vec<&str> = inner.split_whitespace().collect();
+        if parts.len() != 5 {
+            return false;
+        }
+
+        // 每个字段的允许范围
+        let ranges: [(u32, u32); 5] = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)];
+
+        for (i, part) in parts.iter().enumerate() {
+            if !validate_cron_field_range(part, ranges[i].0, ranges[i].1) {
+                return false;
+            }
+        }
+
+        return true;
     }
     false
 }

@@ -891,16 +891,16 @@ impl ScriptRuntime {
                 .expect("REPEAT_PATTERN regex compilation must succeed")
         });
         for cap in repeat_re.captures_iter(script) {
-            if let Some(m) = cap.get(1) {
-                if let Ok(count) = m.as_str().parse::<usize>() {
-                    // .repeat(N) 的结果长度 = 基础字符串长度 × N
-                    // 保守估计：假设基础字符串至少 1 字符
-                    if count > self.limits.max_string_length {
-                        return Err(format!(
-                            "字符串 .repeat({}) 将产生超长结果 (> {} chars)",
-                            count, self.limits.max_string_length
-                        ));
-                    }
+            if let Some(m) = cap.get(1)
+                && let Ok(count) = m.as_str().parse::<usize>()
+            {
+                // .repeat(N) 的结果长度 = 基础字符串长度 × N
+                // 保守估计：假设基础字符串至少 1 字符
+                if count > self.limits.max_string_length {
+                    return Err(format!(
+                        "字符串 .repeat({}) 将产生超长结果 (> {} chars)",
+                        count, self.limits.max_string_length
+                    ));
                 }
             }
         }
@@ -911,15 +911,14 @@ impl ScriptRuntime {
                 .expect("ARRAY_FILL_PATTERN regex compilation must succeed")
         });
         for cap in array_fill_re.captures_iter(script) {
-            if let Some(m) = cap.get(1) {
-                if let Ok(size) = m.as_str().parse::<usize>() {
-                    if size > self.limits.max_string_length {
-                        return Err(format!(
-                            "Array({}) 将分配超大数组 (> {} 元素)",
-                            size, self.limits.max_string_length
-                        ));
-                    }
-                }
+            if let Some(m) = cap.get(1)
+                && let Ok(size) = m.as_str().parse::<usize>()
+                && size > self.limits.max_string_length
+            {
+                return Err(format!(
+                    "Array({}) 将分配超大数组 (> {} 元素)",
+                    size, self.limits.max_string_length
+                ));
             }
         }
 
@@ -993,24 +992,24 @@ fn preprocess_unicode_escapes(script: &str) -> String {
             if chars[i + 1] == 'u' && i + 5 < chars.len() {
                 // \uXXXX 格式
                 let hex: String = chars[i + 2..i + 6].iter().collect();
-                if let Ok(code_point) = u32::from_str_radix(&hex, 16) {
-                    if let Some(c) = char::from_u32(code_point) {
-                        result.push(c);
-                        i += 6;
-                        continue;
-                    }
+                if let Ok(code_point) = u32::from_str_radix(&hex, 16)
+                    && let Some(c) = char::from_u32(code_point)
+                {
+                    result.push(c);
+                    i += 6;
+                    continue;
                 }
             } else if chars[i + 1] == 'u' && i + 5 < chars.len() && chars[i + 2] == '{' {
                 // \u{XXXXX} 格式（ES6 extended）
                 let end_brace = chars[i + 3..].iter().position(|&c| c == '}');
                 if let Some(pos) = end_brace {
                     let hex: String = chars[i + 3..i + 3 + pos].iter().collect();
-                    if let Ok(code_point) = u32::from_str_radix(&hex, 16) {
-                        if let Some(c) = char::from_u32(code_point) {
-                            result.push(c);
-                            i += 3 + pos + 1;
-                            continue;
-                        }
+                    if let Ok(code_point) = u32::from_str_radix(&hex, 16)
+                        && let Some(c) = char::from_u32(code_point)
+                    {
+                        result.push(c);
+                        i += 3 + pos + 1;
+                        continue;
                     }
                 }
             } else if chars[i + 1] == 'x' && i + 3 < chars.len() {

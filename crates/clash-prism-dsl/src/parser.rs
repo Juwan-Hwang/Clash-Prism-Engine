@@ -910,38 +910,38 @@ fn process_conditional_array_items(arr: &serde_json::Value) -> serde_json::Value
     for item in items {
         if let Some(obj) = item.as_object() {
             // Check if this is a conditional rule object (has __when__ key)
-            if obj.contains_key("__when__") {
-                if let Some(when_obj) = obj.get("__when__").and_then(|v| v.as_object()) {
-                    // Check for `enabled` condition — can be resolved at parse time
-                    if let Some(enabled_val) = when_obj.get("enabled") {
-                        if let Some(false) = enabled_val.as_bool() {
-                            // enabled: false -> skip this rule entirely
-                            continue;
-                        }
-                        // enabled: true -> extract __rule__ if present
-                        if let Some(rule_str) = obj.get("__rule__").and_then(|v| v.as_str()) {
-                            result.push(serde_json::Value::String(rule_str.to_string()));
-                            continue;
-                        }
-                    }
-
-                    // Has __when__ but no `enabled` key (e.g., platform, core, time conditions)
-                    // -> keep as conditional object for runtime evaluation
-                    // Extract __rule__ if present, otherwise keep the whole object
-                    if let Some(rule_str) = obj.get("__rule__").and_then(|v| v.as_str()) {
-                        // Wrap in a conditional object that the executor can evaluate later
-                        let mut cond_obj = serde_json::Map::new();
-                        cond_obj.insert(
-                            "__when__".to_string(),
-                            obj.get("__when__").cloned().unwrap_or_default(),
-                        );
-                        cond_obj.insert(
-                            "__rule__".to_string(),
-                            serde_json::Value::String(rule_str.to_string()),
-                        );
-                        result.push(serde_json::Value::Object(cond_obj));
+            if obj.contains_key("__when__")
+                && let Some(when_obj) = obj.get("__when__").and_then(|v| v.as_object())
+            {
+                // Check for `enabled` condition — can be resolved at parse time
+                if let Some(enabled_val) = when_obj.get("enabled") {
+                    if let Some(false) = enabled_val.as_bool() {
+                        // enabled: false -> skip this rule entirely
                         continue;
                     }
+                    // enabled: true -> extract __rule__ if present
+                    if let Some(rule_str) = obj.get("__rule__").and_then(|v| v.as_str()) {
+                        result.push(serde_json::Value::String(rule_str.to_string()));
+                        continue;
+                    }
+                }
+
+                // Has __when__ but no `enabled` key (e.g., platform, core, time conditions)
+                // -> keep as conditional object for runtime evaluation
+                // Extract __rule__ if present, otherwise keep the whole object
+                if let Some(rule_str) = obj.get("__rule__").and_then(|v| v.as_str()) {
+                    // Wrap in a conditional object that the executor can evaluate later
+                    let mut cond_obj = serde_json::Map::new();
+                    cond_obj.insert(
+                        "__when__".to_string(),
+                        obj.get("__when__").cloned().unwrap_or_default(),
+                    );
+                    cond_obj.insert(
+                        "__rule__".to_string(),
+                        serde_json::Value::String(rule_str.to_string()),
+                    );
+                    result.push(serde_json::Value::Object(cond_obj));
+                    continue;
                 }
             }
         }

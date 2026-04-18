@@ -88,15 +88,15 @@ impl LifecycleManager {
     fn add_hooks_to_registry(&mut self, plugin_id: &str, manifest: &PluginManifest) {
         for hook in &manifest.hooks {
             // 检查重复注册，避免同一插件多次注册同一钩子
-            if let Some(listeners) = self.hook_registry.get(hook) {
-                if listeners.contains(&plugin_id.to_string()) {
-                    tracing::warn!(
-                        plugin = plugin_id,
-                        hook = %hook,
-                        "插件已注册此钩子，跳过重复注册"
-                    );
-                    continue;
-                }
+            if let Some(listeners) = self.hook_registry.get(hook)
+                && listeners.contains(&plugin_id.to_string())
+            {
+                tracing::warn!(
+                    plugin = plugin_id,
+                    hook = %hook,
+                    "插件已注册此钩子，跳过重复注册"
+                );
+                continue;
             }
             self.hook_registry
                 .entry(hook.clone())

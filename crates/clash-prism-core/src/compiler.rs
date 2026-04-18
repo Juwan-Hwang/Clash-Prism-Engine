@@ -228,10 +228,10 @@ impl PatchCompiler {
         // 同级时无依赖的 Patch 仍然按文件名字典序排列（确定性）
         let mut queue: BTreeMap<(String, PatchId), ()> = BTreeMap::new();
         for (id, &degree) in &in_degree {
-            if degree == 0 {
-                if let Some(sort_key) = id_to_sort_key.get(id) {
-                    queue.insert((sort_key.clone(), id.clone()), ());
-                }
+            if degree == 0
+                && let Some(sort_key) = id_to_sort_key.get(id)
+            {
+                queue.insert((sort_key.clone(), id.clone()), ());
             }
         }
 
@@ -246,10 +246,10 @@ impl PatchCompiler {
                 for neighbor in neighbors {
                     if let Some(degree) = in_degree.get_mut(neighbor) {
                         *degree -= 1;
-                        if *degree == 0 {
-                            if let Some(sort_key) = id_to_sort_key.get(neighbor) {
-                                queue.insert((sort_key.clone(), neighbor.clone()), ());
-                            }
+                        if *degree == 0
+                            && let Some(sort_key) = id_to_sort_key.get(neighbor)
+                        {
+                            queue.insert((sort_key.clone(), neighbor.clone()), ());
                         }
                     }
                 }
@@ -501,11 +501,11 @@ pub fn compile_and_execute_pipeline(
                             // Check if ANY of the dependency's patch IDs belongs to a different group
                             let mut cross_dep_group: Option<&str> = None;
                             for dep_id in ids {
-                                if let Some(&dep_group) = patch_group.get(dep_id.as_str()) {
-                                    if dep_group != group_name.as_str() {
-                                        cross_dep_group = Some(dep_group);
-                                        break;
-                                    }
+                                if let Some(&dep_group) = patch_group.get(dep_id.as_str())
+                                    && dep_group != group_name.as_str()
+                                {
+                                    cross_dep_group = Some(dep_group);
+                                    break;
                                 }
                             }
                             if let Some(dep_group) = cross_dep_group {
@@ -525,19 +525,19 @@ pub fn compile_and_execute_pipeline(
                         }
                     };
 
-                    if let Some(&dep_group) = patch_group.get(dep_target) {
-                        if dep_group != group_name.as_str() {
-                            return Err(crate::error::PrismError::DslParse {
-                                message: format!(
-                                    "跨 Profile 组依赖不允许: Patch '{}' (Profile '{}') 依赖 Profile '{}' 中的 Patch。\
+                    if let Some(&dep_group) = patch_group.get(dep_target)
+                        && dep_group != group_name.as_str()
+                    {
+                        return Err(crate::error::PrismError::DslParse {
+                            message: format!(
+                                "跨 Profile 组依赖不允许: Patch '{}' (Profile '{}') 依赖 Profile '{}' 中的 Patch。\
                                      Profile 组在 Phase 1 中并发执行，跨组依赖无法保证顺序。\
                                      请将相关 Patch 移至同一 Profile 组或改用 Shared 级 Scope。",
-                                    p.id, group_name, dep_group
-                                ),
-                                file: None,
-                                line: None,
-                            });
-                        }
+                                p.id, group_name, dep_group
+                            ),
+                            file: None,
+                            line: None,
+                        });
                     }
                 }
             }
@@ -603,34 +603,34 @@ impl ConditionPrecompiler {
     pub fn compile_when(when: &serde_yml::Mapping) -> std::result::Result<Scope, CompileError> {
         let mut builder = ScopedBuilder::new();
 
-        if let Some(core) = when.get(serde_yml::Value::String("core".into())) {
-            if let Some(core_str) = core.as_str() {
-                // Semantic validation: core field must be a known kernel name.
-                // "clash" and "meta" are accepted as legacy aliases for "mihomo"
-                // (the project was formerly known as Clash Meta). They are mapped
-                // to "mihomo" so that existing .prism.yaml files continue to work.
-                // Only "mihomo" and "clash-rs" have corresponding TargetCore variants.
-                let normalized_core = match core_str {
-                    "clash" | "meta" => {
-                        tracing::warn!(
-                            core = core_str,
-                            "'{core_str}' is a legacy alias for 'mihomo' (formerly Clash Meta). \
-                             Please update to 'mihomo' in your .prism.yaml files. \
-                             This alias will be normalized to 'mihomo'."
-                        );
-                        "mihomo"
-                    }
-                    _ => core_str,
-                };
-                if !matches!(normalized_core, "mihomo" | "clash-rs") {
+        if let Some(core) = when.get(serde_yml::Value::String("core".into()))
+            && let Some(core_str) = core.as_str()
+        {
+            // Semantic validation: core field must be a known kernel name.
+            // "clash" and "meta" are accepted as legacy aliases for "mihomo"
+            // (the project was formerly known as Clash Meta). They are mapped
+            // to "mihomo" so that existing .prism.yaml files continue to work.
+            // Only "mihomo" and "clash-rs" have corresponding TargetCore variants.
+            let normalized_core = match core_str {
+                "clash" | "meta" => {
                     tracing::warn!(
                         core = core_str,
-                        "core 字段值 '{}' 不是已知的内核名称 (mihomo / clash-rs)，将继续但可能不会匹配",
-                        core_str
+                        "'{core_str}' is a legacy alias for 'mihomo' (formerly Clash Meta). \
+                             Please update to 'mihomo' in your .prism.yaml files. \
+                             This alias will be normalized to 'mihomo'."
                     );
+                    "mihomo"
                 }
-                builder = builder.core(normalized_core);
+                _ => core_str,
+            };
+            if !matches!(normalized_core, "mihomo" | "clash-rs") {
+                tracing::warn!(
+                    core = core_str,
+                    "core 字段值 '{}' 不是已知的内核名称 (mihomo / clash-rs)，将继续但可能不会匹配",
+                    core_str
+                );
             }
+            builder = builder.core(normalized_core);
         }
 
         if let Some(platform_val) = when.get(serde_yml::Value::String("platform".into())) {
@@ -656,19 +656,19 @@ impl ConditionPrecompiler {
             builder = builder.platform(platforms);
         }
 
-        if let Some(profile) = when.get(serde_yml::Value::String("profile".into())) {
-            if let Some(profile_str) = profile.as_str() {
-                builder = builder.profile(profile_str);
-            }
+        if let Some(profile) = when.get(serde_yml::Value::String("profile".into()))
+            && let Some(profile_str) = profile.as_str()
+        {
+            builder = builder.profile(profile_str);
         }
 
         // Parse time condition
-        if let Some(time_val) = when.get(serde_yml::Value::String("time".into())) {
-            if let Some(time_str) = time_val.as_str() {
-                let time_range = crate::scope::TimeRange::parse(time_str)
-                    .map_err(CompileError::ConditionPrecompile)?;
-                builder = builder.time(time_range);
-            }
+        if let Some(time_val) = when.get(serde_yml::Value::String("time".into()))
+            && let Some(time_str) = time_val.as_str()
+        {
+            let time_range = crate::scope::TimeRange::parse(time_str)
+                .map_err(CompileError::ConditionPrecompile)?;
+            builder = builder.time(time_range);
         }
 
         // File-level enabled condition
@@ -684,10 +684,10 @@ impl ConditionPrecompiler {
         }
 
         // WiFi SSID condition
-        if let Some(ssid_val) = when.get(serde_yml::Value::String("ssid".into())) {
-            if let Some(ssid_str) = ssid_val.as_str() {
-                builder = builder.ssid(ssid_str);
-            }
+        if let Some(ssid_val) = when.get(serde_yml::Value::String("ssid".into()))
+            && let Some(ssid_str) = ssid_val.as_str()
+        {
+            builder = builder.ssid(ssid_str);
         }
 
         Ok(builder.build())

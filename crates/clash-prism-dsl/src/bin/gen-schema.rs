@@ -79,29 +79,29 @@ fn main() {
     // Collect ops referenced in the static schema's array_field definition
     let mut schema_ops = Vec::new();
     if let Some(defs) = schema.get("definitions").and_then(|v| v.as_object()) {
-        if let Some(af) = defs.get("array_field").and_then(|v| v.as_object()) {
-            if let Some(one_of) = af.get("oneOf").and_then(|v| v.as_array()) {
-                // Find the object variant (second element) that contains $-prefixed ops
-                for variant in one_of {
-                    if let Some(props) = variant.get("properties").and_then(|v| v.as_object()) {
-                        for key in props.keys() {
-                            if key.starts_with('$') {
-                                schema_ops.push(key.as_str());
-                            }
+        if let Some(af) = defs.get("array_field").and_then(|v| v.as_object())
+            && let Some(one_of) = af.get("oneOf").and_then(|v| v.as_array())
+        {
+            // Find the object variant (second element) that contains $-prefixed ops
+            for variant in one_of {
+                if let Some(props) = variant.get("properties").and_then(|v| v.as_object()) {
+                    for key in props.keys() {
+                        if key.starts_with('$') {
+                            schema_ops.push(key.as_str());
                         }
                     }
                 }
             }
         }
         // Also check config_field for $override and $default
-        if let Some(cf) = defs.get("config_field").and_then(|v| v.as_object()) {
-            if let Some(one_of) = cf.get("oneOf").and_then(|v| v.as_array()) {
-                for variant in one_of {
-                    if let Some(props) = variant.get("properties").and_then(|v| v.as_object()) {
-                        for key in props.keys() {
-                            if key.starts_with('$') && !schema_ops.contains(&key.as_str()) {
-                                schema_ops.push(key.as_str());
-                            }
+        if let Some(cf) = defs.get("config_field").and_then(|v| v.as_object())
+            && let Some(one_of) = cf.get("oneOf").and_then(|v| v.as_array())
+        {
+            for variant in one_of {
+                if let Some(props) = variant.get("properties").and_then(|v| v.as_object()) {
+                    for key in props.keys() {
+                        if key.starts_with('$') && !schema_ops.contains(&key.as_str()) {
+                            schema_ops.push(key.as_str());
                         }
                     }
                 }

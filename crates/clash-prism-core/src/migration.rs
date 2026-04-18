@@ -138,10 +138,10 @@ pub fn run_migrations(
     }
 
     // 5. 更新配置中的版本号
-    if latest_version > current_version {
-        if let Err(e) = set_version(config, latest_version) {
-            tracing::warn!(error = %e, "迁移完成但版本号更新失败");
-        }
+    if latest_version > current_version
+        && let Err(e) = set_version(config, latest_version)
+    {
+        tracing::warn!(error = %e, "迁移完成但版本号更新失败");
     }
 
     reports

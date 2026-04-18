@@ -354,19 +354,19 @@ impl FailoverTracker {
             // 检查是否达到阈值
             if count >= self.policy.threshold {
                 // 检查组级冷却时间（优先于 per-node 冷却）
-                if let Some(group_switch_time) = self.group_last_switch {
-                    if now.duration_since(group_switch_time) < self.policy.cooldown {
-                        // 组级冷却期内，不触发切换
-                        return None;
-                    }
+                if let Some(group_switch_time) = self.group_last_switch
+                    && now.duration_since(group_switch_time) < self.policy.cooldown
+                {
+                    // 组级冷却期内，不触发切换
+                    return None;
                 }
 
                 // 检查 per-node 冷却时间
-                if let Some(switch_time) = self.last_switch.get(node_name) {
-                    if now.duration_since(*switch_time) < self.policy.cooldown {
-                        // 冷却期内，不触发切换
-                        return None;
-                    }
+                if let Some(switch_time) = self.last_switch.get(node_name)
+                    && now.duration_since(*switch_time) < self.policy.cooldown
+                {
+                    // 冷却期内，不触发切换
+                    return None;
                 }
 
                 // 触发切换 — 同时更新组级和节点级冷却

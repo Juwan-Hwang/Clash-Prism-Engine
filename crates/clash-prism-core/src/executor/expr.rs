@@ -926,18 +926,18 @@ fn apply_pipe_filter(
     // First try with parentheses: func_name(args) == literal
     if let Some(paren_pos) = right.find('(') {
         let func_name = right[..paren_pos].trim();
-        if let Some(func) = BuiltinFunction::from_name(func_name) {
-            if let Some(args_str) = find_balanced_parens(&right[paren_pos..]) {
-                let after_args = right[paren_pos + 1 + args_str.len()..].trim();
-                // Check if there's a comparison operator after the function call
-                for op in &["==", "!=", ">=", "<=", ">", "<"] {
-                    if let Some(rest) = after_args.strip_prefix(op) {
-                        let right_val_str = rest.trim();
-                        let right_val = parse_literal(right_val_str)?;
-                        let args = split_function_args(args_str)?;
-                        let func_result = eval_builtin_function_on_value(func, &args, left, item)?;
-                        return compare_values(&func_result, &right_val, op);
-                    }
+        if let Some(func) = BuiltinFunction::from_name(func_name)
+            && let Some(args_str) = find_balanced_parens(&right[paren_pos..])
+        {
+            let after_args = right[paren_pos + 1 + args_str.len()..].trim();
+            // Check if there's a comparison operator after the function call
+            for op in &["==", "!=", ">=", "<=", ">", "<"] {
+                if let Some(rest) = after_args.strip_prefix(op) {
+                    let right_val_str = rest.trim();
+                    let right_val = parse_literal(right_val_str)?;
+                    let args = split_function_args(args_str)?;
+                    let func_result = eval_builtin_function_on_value(func, &args, left, item)?;
+                    return compare_values(&func_result, &right_val, op);
                 }
             }
         }
@@ -960,18 +960,18 @@ fn apply_pipe_filter(
     // Try with parentheses first (pipe context: apply function on piped value)
     if let Some(paren_pos) = right.find('(') {
         let func_name = right[..paren_pos].trim();
-        if let Some(func) = BuiltinFunction::from_name(func_name) {
-            if let Some(args_str) = find_balanced_parens(&right[paren_pos..]) {
-                let args = split_function_args(args_str)?;
-                let func_result = eval_builtin_function_on_value(func, &args, left, item)?;
-                match func_result {
-                    ExprValue::Bool(b) => return Ok(b),
-                    _ => {
-                        return Err(ExprError::TypeMismatch {
-                            expected: "bool".into(),
-                            actual: format!("{:?}", func_result),
-                        });
-                    }
+        if let Some(func) = BuiltinFunction::from_name(func_name)
+            && let Some(args_str) = find_balanced_parens(&right[paren_pos..])
+        {
+            let args = split_function_args(args_str)?;
+            let func_result = eval_builtin_function_on_value(func, &args, left, item)?;
+            match func_result {
+                ExprValue::Bool(b) => return Ok(b),
+                _ => {
+                    return Err(ExprError::TypeMismatch {
+                        expected: "bool".into(),
+                        actual: format!("{:?}", func_result),
+                    });
                 }
             }
         }
@@ -1022,11 +1022,11 @@ fn resolve_pipe_stage(
     // Try as a function call: lower, upper, len, etc.
     if let Some(paren_pos) = stage.find('(') {
         let func_name = stage[..paren_pos].trim();
-        if let Some(func) = BuiltinFunction::from_name(func_name) {
-            if let Some(args_str) = find_balanced_parens(&stage[paren_pos..]) {
-                let args = split_function_args(args_str)?;
-                return eval_builtin_function_on_value(func, &args, left, item);
-            }
+        if let Some(func) = BuiltinFunction::from_name(func_name)
+            && let Some(args_str) = find_balanced_parens(&stage[paren_pos..])
+        {
+            let args = split_function_args(args_str)?;
+            return eval_builtin_function_on_value(func, &args, left, item);
         }
     }
 

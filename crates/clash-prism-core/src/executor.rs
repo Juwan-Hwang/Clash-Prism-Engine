@@ -1282,14 +1282,14 @@ pub fn apply_override(config: &mut serde_json::Value, path: &str, value: &serde_
 /// 若 `value` 不是数组，则将其包装为单元素数组后插入，
 /// 与内部 `execute_prepend_in_place` 行为一致。
 pub fn apply_prepend(config: &mut serde_json::Value, path: &str, value: &serde_json::Value) {
-    if let Some(arr) = get_json_path_mut(config, path) {
-        if let Some(existing) = arr.as_array_mut() {
-            let new_items = match value.as_array() {
-                Some(arr) => arr,
-                None => std::slice::from_ref(value),
-            };
-            existing.splice(0..0, new_items.iter().rev().cloned());
-        }
+    if let Some(arr) = get_json_path_mut(config, path)
+        && let Some(existing) = arr.as_array_mut()
+    {
+        let new_items = match value.as_array() {
+            Some(arr) => arr,
+            None => std::slice::from_ref(value),
+        };
+        existing.splice(0..0, new_items.iter().rev().cloned());
     }
 }
 
@@ -1298,14 +1298,14 @@ pub fn apply_prepend(config: &mut serde_json::Value, path: &str, value: &serde_j
 /// 若 `value` 不是数组，则将其包装为单元素数组后追加，
 /// 与内部 `execute_prepend_in_place` 行为一致。
 pub fn apply_append(config: &mut serde_json::Value, path: &str, value: &serde_json::Value) {
-    if let Some(arr) = get_json_path_mut(config, path) {
-        if let Some(existing) = arr.as_array_mut() {
-            let new_items = match value.as_array() {
-                Some(arr) => arr,
-                None => std::slice::from_ref(value),
-            };
-            existing.extend(new_items.iter().cloned());
-        }
+    if let Some(arr) = get_json_path_mut(config, path)
+        && let Some(existing) = arr.as_array_mut()
+    {
+        let new_items = match value.as_array() {
+            Some(arr) => arr,
+            None => std::slice::from_ref(value),
+        };
+        existing.extend(new_items.iter().cloned());
     }
 }
 
@@ -1454,10 +1454,10 @@ pub fn check_patch_condition(patch: &Patch, context: &ExecutionContext) -> bool 
     match &patch.scope {
         crate::scope::Scope::Global => true,
         crate::scope::Scope::Profile(_) => {
-            if let Some(pname) = &context.profile_name {
-                if let crate::scope::Scope::Profile(scope_profile) = &patch.scope {
-                    return PatchExecutor::profile_matches(pname, scope_profile);
-                }
+            if let Some(pname) = &context.profile_name
+                && let crate::scope::Scope::Profile(scope_profile) = &patch.scope
+            {
+                return PatchExecutor::profile_matches(pname, scope_profile);
             }
             // No profile_name in context (e.g., CLI without --profile flag):
             // Profile-level patches are NOT applied by default. This prevents
@@ -1486,33 +1486,33 @@ pub fn check_patch_condition(patch: &Patch, context: &ExecutionContext) -> bool 
                     return false;
                 }
             }
-            if let Some(tr) = time_range {
-                if !tr.is_active_now() {
+            if let Some(tr) = time_range
+                && !tr.is_active_now()
+            {
+                return false;
+            }
+            if let (Some(scope_core), Some(ctx_core)) = (core, &context.core_type)
+                && scope_core != ctx_core
+            {
+                return false;
+            }
+            if let Some(scope_platforms) = platform
+                && let Some(ctx_platform) = &context.platform
+            {
+                // repeated allocation inside the closure for each scope_platform entry.
+                let ctx_platform_lower = ctx_platform.to_lowercase();
+                let matched = scope_platforms.iter().any(|p| {
+                    let p_str = format!("{}", p).to_lowercase();
+                    p_str == ctx_platform_lower || p_str == "all" || ctx_platform_lower == "all"
+                });
+                if !matched {
                     return false;
                 }
             }
-            if let (Some(scope_core), Some(ctx_core)) = (core, &context.core_type) {
-                if scope_core != ctx_core {
-                    return false;
-                }
-            }
-            if let Some(scope_platforms) = platform {
-                if let Some(ctx_platform) = &context.platform {
-                    // repeated allocation inside the closure for each scope_platform entry.
-                    let ctx_platform_lower = ctx_platform.to_lowercase();
-                    let matched = scope_platforms.iter().any(|p| {
-                        let p_str = format!("{}", p).to_lowercase();
-                        p_str == ctx_platform_lower || p_str == "all" || ctx_platform_lower == "all"
-                    });
-                    if !matched {
-                        return false;
-                    }
-                }
-            }
-            if let Some(scope_profile) = profile {
-                if let Some(ctx_profile) = &context.profile_name {
-                    return PatchExecutor::profile_matches(ctx_profile, scope_profile);
-                }
+            if let Some(scope_profile) = profile
+                && let Some(ctx_profile) = &context.profile_name
+            {
+                return PatchExecutor::profile_matches(ctx_profile, scope_profile);
             }
             true
         }

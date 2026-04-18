@@ -220,23 +220,22 @@ impl Validator {
                     let mut refs = Vec::new();
                     if let Some(proxies) = group.get("proxies").and_then(|v| v.as_array()) {
                         for proxy_ref in proxies {
-                            if let Some(ref_name) = proxy_ref.as_str() {
-                                if !SPECIAL_PROXY_NAMES.contains(&ref_name)
-                                    && !is_filter_selector(ref_name)
-                                    && group_names.contains(ref_name)
-                                {
-                                    refs.push(ref_name.to_string());
-                                }
+                            if let Some(ref_name) = proxy_ref.as_str()
+                                && !SPECIAL_PROXY_NAMES.contains(&ref_name)
+                                && !is_filter_selector(ref_name)
+                                && group_names.contains(ref_name)
+                            {
+                                refs.push(ref_name.to_string());
                             }
                         }
                     }
                     // Also check `use` field for group chaining
                     if let Some(use_groups) = group.get("use").and_then(|v| v.as_array()) {
                         for use_ref in use_groups {
-                            if let Some(ref_name) = use_ref.as_str() {
-                                if group_names.contains(ref_name) {
-                                    refs.push(ref_name.to_string());
-                                }
+                            if let Some(ref_name) = use_ref.as_str()
+                                && group_names.contains(ref_name)
+                            {
+                                refs.push(ref_name.to_string());
                             }
                         }
                     }
@@ -249,15 +248,14 @@ impl Validator {
         let mut visiting = std::collections::HashSet::<String>::new();
         let mut visited = std::collections::HashSet::<String>::new();
         for group_name in &group_names {
-            if !visited.contains(group_name) {
-                if let Some(cycle) =
+            if !visited.contains(group_name)
+                && let Some(cycle) =
                     detect_cycle(group_name, &group_refs, &mut visiting, &mut visited)
-                {
-                    result = result.with_error(ValidationError {
-                        path: "proxy-groups".to_string(),
-                        message: format!("代理组存在循环引用: {}", cycle),
-                    });
-                }
+            {
+                result = result.with_error(ValidationError {
+                    path: "proxy-groups".to_string(),
+                    message: format!("代理组存在循环引用: {}", cycle),
+                });
             }
         }
 
@@ -574,41 +572,42 @@ fn is_filter_selector(ref_name: &str) -> bool {
     }
     // KEYWORD(value) pattern — filter selectors use uppercase keywords
     // followed by parenthesized arguments
-    if let Some(paren_pos) = ref_name.find('(') {
-        if paren_pos > 0 && ref_name.ends_with(')') {
-            let keyword = &ref_name[..paren_pos];
-            // Known mihomo filter keywords
-            // MATCH is a valid filter selector keyword that matches all nodes (equivalent
-            // to a catch-all pattern). It is distinct from the MATCH rule keyword in the
-            // rules array. Reference: https://wiki.metacubex.one/config/proxy-groups/filter/
-            return matches!(
-                keyword,
-                "NAME"
-                    | "TYPE"
-                    | "REGEXP"
-                    | "KEYWORD"
-                    | "GEOSITE"
-                    | "GEOIP"
-                    | "IP_CIDR"
-                    | "SRC_IP_CIDR"
-                    | "DST_IP_CIDR"
-                    | "PROCESS_NAME"
-                    | "PROCESS_PATH"
-                    | "UID"
-                    | "IN_PORT"
-                    | "OUT_PORT"
-                    | "NETWORK"
-                    | "DST_PORT"
-                    | "SRC_PORT"
-                    | "RULE_SET"
-                    | "SRC_GEOIP"
-                    | "DST_GEOIP"
-                    | "IPASN"
-                    | "SRC_IPASN"
-                    | "DST_IPASN"
-                    | "MATCH"
-            );
-        }
+    if let Some(paren_pos) = ref_name.find('(')
+        && paren_pos > 0
+        && ref_name.ends_with(')')
+    {
+        let keyword = &ref_name[..paren_pos];
+        // Known mihomo filter keywords
+        // MATCH is a valid filter selector keyword that matches all nodes (equivalent
+        // to a catch-all pattern). It is distinct from the MATCH rule keyword in the
+        // rules array. Reference: https://wiki.metacubex.one/config/proxy-groups/filter/
+        return matches!(
+            keyword,
+            "NAME"
+                | "TYPE"
+                | "REGEXP"
+                | "KEYWORD"
+                | "GEOSITE"
+                | "GEOIP"
+                | "IP_CIDR"
+                | "SRC_IP_CIDR"
+                | "DST_IP_CIDR"
+                | "PROCESS_NAME"
+                | "PROCESS_PATH"
+                | "UID"
+                | "IN_PORT"
+                | "OUT_PORT"
+                | "NETWORK"
+                | "DST_PORT"
+                | "SRC_PORT"
+                | "RULE_SET"
+                | "SRC_GEOIP"
+                | "DST_GEOIP"
+                | "IPASN"
+                | "SRC_IPASN"
+                | "DST_IPASN"
+                | "MATCH"
+        );
     }
     false
 }

@@ -111,22 +111,21 @@ impl<V: Clone> MemoryCache<V> {
             None => return Some(entry.value),
         };
 
-        if let Some(stored_mtime) = entry.mtime {
-            if let Ok(meta) = fs::metadata(&file_path) {
-                if let Ok(modified) = meta.modified() {
-                    let current_mtime = modified
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    if current_mtime != stored_mtime {
-                        // 步骤 3：mtime 变化，重新获取锁移除失效条目
-                        let mut inner = self.inner.lock().unwrap();
-                        inner.entries.remove(key);
-                        inner.file_paths.remove(key);
-                        inner.fifo_order.shift_remove(key);
-                        return None; // mtime 变化，缓存失效
-                    }
-                }
+        if let Some(stored_mtime) = entry.mtime
+            && let Ok(meta) = fs::metadata(&file_path)
+            && let Ok(modified) = meta.modified()
+        {
+            let current_mtime = modified
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if current_mtime != stored_mtime {
+                // 步骤 3：mtime 变化，重新获取锁移除失效条目
+                let mut inner = self.inner.lock().unwrap();
+                inner.entries.remove(key);
+                inner.file_paths.remove(key);
+                inner.fifo_order.shift_remove(key);
+                return None; // mtime 变化，缓存失效
             }
         }
         Some(entry.value)
@@ -352,7 +351,7 @@ impl DiskCache {
             .write_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
-        if count % CLEANUP_INTERVAL == 0 {
+        if count.is_multiple_of(CLEANUP_INTERVAL) {
             self.cleanup_stale_tmp_files();
         }
 
@@ -400,12 +399,12 @@ impl DiskCache {
                 continue;
             }
 
-            if let Ok(meta) = entry.metadata() {
-                if let Ok(modified) = meta.modified() {
-                    if modified < cutoff && fs::remove_file(&path).is_ok() {
-                        cleaned += 1;
-                    }
-                }
+            if let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && modified < cutoff
+                && fs::remove_file(&path).is_ok()
+            {
+                cleaned += 1;
             }
         }
 
@@ -422,14 +421,14 @@ impl DiskCache {
                     // Verify the corresponding .cache file exists (meaning the
                     // rename succeeded but the temp file wasn't cleaned up)
                     let target = path.with_extension("cache");
-                    if target.exists() {
-                        if let Err(e) = fs::remove_file(&path) {
-                            tracing::debug!(
-                                "Failed to clean up stale temp file {}: {}",
-                                path.display(),
-                                e
-                            );
-                        }
+                    if target.exists()
+                        && let Err(e) = fs::remove_file(&path)
+                    {
+                        tracing::debug!(
+                            "Failed to clean up stale temp file {}: {}",
+                            path.display(),
+                            e
+                        );
                     }
                 }
             }

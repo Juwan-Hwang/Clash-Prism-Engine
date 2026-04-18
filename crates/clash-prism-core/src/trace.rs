@@ -150,10 +150,10 @@ impl TraceManager {
                 continue;
             }
             // Check patch-level condition
-            if let Some(pred) = &patch.condition {
-                if !crate::executor::evaluate_predicate(&pred.expr, &config).unwrap_or(false) {
-                    continue;
-                }
+            if let Some(pred) = &patch.condition
+                && !crate::executor::evaluate_predicate(&pred.expr, &config).unwrap_or(false)
+            {
+                continue;
             }
             apply_patch_simple(&mut config, patch);
         }
@@ -493,40 +493,40 @@ fn apply_single_op(
             super::executor::apply_set_default(config, path, value);
         }
         PatchOp::Filter { expr } => {
-            if let Some(arr) = get_json_path_mut(config, path) {
-                if let Some(existing) = arr.as_array_mut() {
-                    let expr_str = &expr.expr;
-                    // matching executor's execute_filter_in_place behavior.
-                    existing.retain(|item| {
-                        super::executor::evaluate_predicate(expr_str, item).unwrap_or(true)
-                    });
-                }
+            if let Some(arr) = get_json_path_mut(config, path)
+                && let Some(existing) = arr.as_array_mut()
+            {
+                let expr_str = &expr.expr;
+                // matching executor's execute_filter_in_place behavior.
+                existing.retain(|item| {
+                    super::executor::evaluate_predicate(expr_str, item).unwrap_or(true)
+                });
             }
         }
         PatchOp::Transform { expr } => {
-            if let Some(arr) = get_json_path_mut(config, path) {
-                if let Some(existing) = arr.as_array_mut() {
-                    let expr_str = &expr.expr;
-                    // Apply transform expression to each element
-                    for item in existing.iter_mut() {
-                        if let Ok(transformed) =
-                            super::executor::evaluate_transform_expr(expr_str, item)
-                        {
-                            *item = transformed;
-                        }
+            if let Some(arr) = get_json_path_mut(config, path)
+                && let Some(existing) = arr.as_array_mut()
+            {
+                let expr_str = &expr.expr;
+                // Apply transform expression to each element
+                for item in existing.iter_mut() {
+                    if let Ok(transformed) =
+                        super::executor::evaluate_transform_expr(expr_str, item)
+                    {
+                        *item = transformed;
                     }
                 }
             }
         }
         PatchOp::Remove { expr } => {
-            if let Some(arr) = get_json_path_mut(config, path) {
-                if let Some(existing) = arr.as_array_mut() {
-                    let expr_str = &expr.expr;
-                    // Remove matching elements (semantically opposite to Filter)
-                    existing.retain(|item| {
-                        !super::executor::evaluate_predicate(expr_str, item).unwrap_or(true)
-                    });
-                }
+            if let Some(arr) = get_json_path_mut(config, path)
+                && let Some(existing) = arr.as_array_mut()
+            {
+                let expr_str = &expr.expr;
+                // Remove matching elements (semantically opposite to Filter)
+                existing.retain(|item| {
+                    !super::executor::evaluate_predicate(expr_str, item).unwrap_or(true)
+                });
             }
         }
     }

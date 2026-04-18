@@ -176,13 +176,15 @@ impl PluginManifest {
 
         // 4. Windows 盘符检测（防止 C:\evil 等绝对路径）
         let first_two: String = self.entry.chars().take(2).collect();
-        if let Some(&byte) = first_two.as_bytes().first() {
-            if byte.is_ascii_alphabetic() && first_two.len() == 2 && &first_two[1..] == ":" {
-                errors.push(format!(
-                    "入口文件「{}」不允许使用 Windows 盘符路径",
-                    self.entry
-                ));
-            }
+        if let Some(&byte) = first_two.as_bytes().first()
+            && byte.is_ascii_alphabetic()
+            && first_two.len() == 2
+            && &first_two[1..] == ":"
+        {
+            errors.push(format!(
+                "入口文件「{}」不允许使用 Windows 盘符路径",
+                self.entry
+            ));
         }
 
         // Config Plugin 不能申请 network 权限

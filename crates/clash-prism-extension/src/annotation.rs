@@ -139,10 +139,10 @@ fn find_rule_index(rules: &[serde_json::Value], rule_text: &str) -> Option<usize
         }
         // 对象格式：解析为 serde_json::Value 后使用语义相等比较，
         // 不受 JSON 序列化时 key 顺序影响
-        if r.is_object() {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(rule_text) {
-                return parsed == *r;
-            }
+        if r.is_object()
+            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(rule_text)
+        {
+            return parsed == *r;
         }
         false
     })

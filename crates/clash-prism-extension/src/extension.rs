@@ -118,10 +118,10 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         impl Drop for FailGuard<'_> {
             fn drop(&mut self) {
                 // 仅在成功路径未执行时触发（即编译失败）
-                if !self.succeeded.get() {
-                    if let Ok(mut s) = self.state.lock() {
-                        s.last_compile_success = false;
-                    }
+                if !self.succeeded.get()
+                    && let Ok(mut s) = self.state.lock()
+                {
+                    s.last_compile_success = false;
                 }
             }
         }
@@ -532,26 +532,26 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         // 停止旧的监听线程（带超时保护，避免旧线程卡死时无限阻塞）
         self.watcher_running
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut thread) = lock_or_err(&self.watcher_thread) {
-            if let Some(handle) = thread.take() {
-                // 在独立线程中 join 旧 watcher，通过 channel 实现超时控制
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let _ = handle.join();
-                    let _ = tx.send(());
-                });
-                // 超时设置为 5 秒：watcher 线程在 debounce 窗口内可能正在执行编译，
-                // 给予足够时间让当前编译完成并优雅退出。
-                match rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                    Ok(()) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        tracing::warn!(
-                            "旧 watcher 线程未在 5 秒内退出，已强制继续（旧线程将在后台自行终止）"
-                        );
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        // join 线程已结束（正常情况）
-                    }
+        if let Ok(mut thread) = lock_or_err(&self.watcher_thread)
+            && let Some(handle) = thread.take()
+        {
+            // 在独立线程中 join 旧 watcher，通过 channel 实现超时控制
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = handle.join();
+                let _ = tx.send(());
+            });
+            // 超时设置为 5 秒：watcher 线程在 debounce 窗口内可能正在执行编译，
+            // 给予足够时间让当前编译完成并优雅退出。
+            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    tracing::warn!(
+                        "旧 watcher 线程未在 5 秒内退出，已强制继续（旧线程将在后台自行终止）"
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    // join 线程已结束（正常情况）
                 }
             }
         }
@@ -690,11 +690,10 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         // 优先从 watcher_result 读取
         match lock_or_err(&self.watcher_result) {
             Ok(guard) => {
-                if let Some(ref wr) = *guard {
-                    if let Some(trace) = wr.traces.iter().find(|t| t.patch_id.as_str() == patch_id)
-                    {
-                        return Ok(Self::trace_to_view(trace));
-                    }
+                if let Some(ref wr) = *guard
+                    && let Some(trace) = wr.traces.iter().find(|t| t.patch_id.as_str() == patch_id)
+                {
+                    return Ok(Self::trace_to_view(trace));
                 }
             }
             Err(e) => {
@@ -859,10 +858,10 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
 
     fn get_current_annotations(&self) -> Result<Vec<RuleAnnotation>, String> {
         // 优先从 watcher_result 读取（watcher 线程编译后的最新状态）
-        if let Ok(guard) = lock_or_err(&self.watcher_result) {
-            if let Some(ref wr) = *guard {
-                return Ok(extract_rule_annotations(&wr.traces, &wr.output));
-            }
+        if let Ok(guard) = lock_or_err(&self.watcher_result)
+            && let Some(ref wr) = *guard
+        {
+            return Ok(extract_rule_annotations(&wr.traces, &wr.output));
         }
         let state = lock_or_err(&self.state)?;
         Ok(extract_rule_annotations(
@@ -872,10 +871,10 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
     }
 
     fn get_current_output(&self) -> Result<serde_json::Value, String> {
-        if let Ok(guard) = lock_or_err(&self.watcher_result) {
-            if let Some(ref wr) = *guard {
-                return Ok(wr.output.clone());
-            }
+        if let Ok(guard) = lock_or_err(&self.watcher_result)
+            && let Some(ref wr) = *guard
+        {
+            return Ok(wr.output.clone());
         }
         let state = lock_or_err(&self.state)?;
         Ok(state.last_output.clone())

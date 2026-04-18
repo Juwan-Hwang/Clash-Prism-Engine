@@ -1004,10 +1004,10 @@ impl PrismApi {
                         message: msg,
                         timestamp: chrono::Utc::now(),
                     };
-                    if let Ok(mut logs) = collector.lock() {
-                        if logs.len() < max_log_entries {
-                            logs.push(log_entry);
-                        }
+                    if let Ok(mut logs) = collector.lock()
+                        && logs.len() < max_log_entries
+                    {
+                        logs.push(log_entry);
                     }
                     Ok(())
                 },
@@ -1482,23 +1482,23 @@ impl PrismApi {
 
                 // 直接使用写锁完成读取检查 + 写入，确保检查与写入的原子性。
                 let mut cfg_mut = config.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(existing) = resolve_path_value(&cfg_mut, &key).cloned() {
-                    if !is_type_compatible(&existing, &json_val) {
-                        drop(cfg_mut);
-                        let obj = Object::new(ctx)?;
-                        obj.set("action", "set")?;
-                        obj.set("key", key)?;
-                        obj.set("ok", false)?;
-                        obj.set(
-                            "error",
-                            format!(
-                                "类型不兼容: 目标路径已有类型 '{}', 新值类型 '{}'",
-                                value_type_name(&existing),
-                                value_type_name(&json_val)
-                            ),
-                        )?;
-                        return Ok(obj.into_value());
-                    }
+                if let Some(existing) = resolve_path_value(&cfg_mut, &key).cloned()
+                    && !is_type_compatible(&existing, &json_val)
+                {
+                    drop(cfg_mut);
+                    let obj = Object::new(ctx)?;
+                    obj.set("action", "set")?;
+                    obj.set("key", key)?;
+                    obj.set("ok", false)?;
+                    obj.set(
+                        "error",
+                        format!(
+                            "类型不兼容: 目标路径已有类型 '{}', 新值类型 '{}'",
+                            value_type_name(&existing),
+                            value_type_name(&json_val)
+                        ),
+                    )?;
+                    return Ok(obj.into_value());
                 }
 
                 // 通过点分路径设置值到共享配置中（仍在写锁保护下）
@@ -1586,13 +1586,13 @@ fn resolve_path(value: &serde_json::Value, path: &str) -> serde_json::Value {
 
 /// 解析可能的数组索引访问，如 "groups[0]" → ("groups", Some(0))
 fn parse_array_access(s: &str) -> (&str, Option<usize>) {
-    if let Some(start) = s.find('[') {
-        if let Some(end) = s.find(']') {
-            let key = &s[..start];
-            let idx_str = &s[start + 1..end];
-            if let Ok(idx) = idx_str.parse::<usize>() {
-                return (key, Some(idx));
-            }
+    if let Some(start) = s.find('[')
+        && let Some(end) = s.find(']')
+    {
+        let key = &s[..start];
+        let idx_str = &s[start + 1..end];
+        if let Ok(idx) = idx_str.parse::<usize>() {
+            return (key, Some(idx));
         }
     }
     (s, None)
@@ -1821,13 +1821,13 @@ fn rename_proxies_in_config(
     if let Some(arr) = config.get_mut("proxies").and_then(|v| v.as_array_mut()) {
         for proxy in arr.iter_mut() {
             // 单次 get_mut 获取可变引用，clone 当前值用于比较
-            if let Some(name_val) = proxy.get_mut("name") {
-                if let Some(old_name) = name_val.as_str() {
-                    let new_name = re.replace(old_name, replacement).to_string();
-                    if new_name != old_name {
-                        *name_val = serde_json::Value::String(new_name);
-                        count += 1;
-                    }
+            if let Some(name_val) = proxy.get_mut("name")
+                && let Some(old_name) = name_val.as_str()
+            {
+                let new_name = re.replace(old_name, replacement).to_string();
+                if new_name != old_name {
+                    *name_val = serde_json::Value::String(new_name);
+                    count += 1;
                 }
             }
         }
@@ -1875,10 +1875,10 @@ fn parse_by_fields(by: Option<Value<'_>>) -> Vec<String> {
             };
             let mut fields = Vec::new();
             for item in arr.iter::<Value>().flatten() {
-                if item.is_string() {
-                    if let Ok(s) = item.get::<String>() {
-                        fields.push(s);
-                    }
+                if item.is_string()
+                    && let Ok(s) = item.get::<String>()
+                {
+                    fields.push(s);
                 }
             }
             fields

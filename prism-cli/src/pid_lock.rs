@@ -76,14 +76,15 @@ impl PidLock {
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 // 文件已存在，检查是否为残留的过期 PID
-                if let Ok(existing_pid) = read_pid_from_file(&lock_file) {
-                    if is_process_alive(existing_pid) && !force {
-                        return Err(format!(
-                            "另一个 Prism 实例正在运行 (PID: {})，\
+                if let Ok(existing_pid) = read_pid_from_file(&lock_file)
+                    && is_process_alive(existing_pid)
+                    && !force
+                {
+                    return Err(format!(
+                        "另一个 Prism 实例正在运行 (PID: {})，\
                              使用 --force 强制获取锁",
-                            existing_pid
-                        ));
-                    }
+                        existing_pid
+                    ));
                 }
                 // 进程已不存在（残留的 PID 文件）或 force=true，删除后重新创建
                 let _ = fs::remove_file(&lock_file);
