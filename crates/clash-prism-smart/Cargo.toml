@@ -1,5 +1,6 @@
 [package]
 name = "clash-prism-smart"
+description = "Smart proxy selector with EMA scoring and adaptive scheduling"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
