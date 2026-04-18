@@ -41,7 +41,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Check schema consistency
-        run: cargo run --package prism-dsl --bin gen-schema -- --check
+        run: cargo run --package clash-prism-dsl --bin gen-schema -- --check
 
   # ─── Test (stable) ──────────────────────────────────────
   test:
