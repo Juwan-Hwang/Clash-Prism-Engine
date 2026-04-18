@@ -3,9 +3,12 @@ name = "clash-prism-extension"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "UI Extension interface for integrating Prism Engine into Mihomo GUI clients"
 license = "Apache-2.0"
-authors = ["Juwan Hwang (黄治文)"]
+authors = ["Juwan Hwang (黄治�?"]
 
 [dependencies]
 clash-prism-core = { version = "0.1.0" }
