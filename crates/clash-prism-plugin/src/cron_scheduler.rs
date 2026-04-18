@@ -727,7 +727,8 @@ impl CronScheduler {
                 let delay = next.signed_duration_since(now);
 
                 // 等待直到下次执行时间或收到 shutdown 信号
-                let sleep_duration = Duration::from_secs(delay.num_seconds().max(0) as u64);
+                // .max(1) 防止整分钟边界 delay=0 导致 sleep(0) 空转循环 (CPU 100%)
+                let sleep_duration = Duration::from_secs(delay.num_seconds().max(1) as u64);
                 tokio::select! {
                     _ = sleep(sleep_duration) => {
                         // 再次检查任务是否仍被注册（可能在等待期间被移除）
@@ -1258,10 +1259,10 @@ mod tests {
 
         let scheduler = CronScheduler::new();
 
-        // 注册一个每秒执行的任务（使用 * * * * * 但我们只等一小会儿）
-        // 实际上 cron 最小粒度是分钟，所以我们测试注册和启动流程
+        // 注册一个不可能触发的时间（每年 2 月 30 号）来验证启动/关闭流程
+        // 不使用 "* * * * *" 因为它在整分钟边界会产生 0 延迟导致密集触发
         scheduler
-            .register("counter", "* * * * *", move || {
+            .register("counter", "30 2 30 2 *", move || {
                 counter_clone.fetch_add(1, Ordering::Relaxed);
             })
             .await
@@ -1269,11 +1270,11 @@ mod tests {
 
         scheduler.start().await.unwrap();
 
-        // 等待 2 秒后关闭（不会触发 cron，但验证启动/关闭流程不 panic）
-        sleep(Duration::from_millis(100)).await;
+        // 等待一小段时间后关闭
+        sleep(Duration::from_millis(200)).await;
         scheduler.shutdown().await;
 
-        // 回调不应被触发（因为 cron 最小粒度是 1 分钟）
+        // 回调不应被触发（2 月 30 号不存在）
         assert_eq!(counter.load(Ordering::Relaxed), 0);
     }
 
