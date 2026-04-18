@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-authors = ["Juwan Hwang (黄治文)"]
 description = "UI Extension interface for integrating Prism Engine into Mihomo GUI clients"
 
 [dependencies]
