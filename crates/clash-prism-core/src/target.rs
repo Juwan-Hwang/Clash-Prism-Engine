@@ -337,7 +337,8 @@ impl TargetCompiler {
     ///
     /// 仅在 Unix-like 系统上可用（Linux / macOS / BSD）。
     /// Windows 平台会返回错误。
-    fn reload_by_signal(&self, _pid: u32) -> Result<HotReloadResult> {
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    fn reload_by_signal(&self, pid: u32) -> Result<HotReloadResult> {
         #[cfg(unix)]
         {
             // 检查 PID 有效性（PID=0 表示发给所有进程，不允许）
