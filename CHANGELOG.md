@@ -5,6 +5,31 @@ All notable changes to Prism Engine will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-04-19
+
+### Added
+
+- `PrismExtension::trace_report()` — 生成完整执行追踪文本报告（GUI 和 CLI 均可调用）
+- `prism-cli apply --verbose` — 输出逐条变更详情的 Trace Report
+- `rustfmt.toml` / `.clippy.toml` — 锁定格式化和 lint 配置
+- `SECURITY.md` — 安全漏洞报告策略
+- `README.en.md` — 英文版 README
+- Release CI workflow — 4 平台自动构建（Linux / macOS x64 / macOS ARM / Windows）
+
+### Changed
+
+- Trace Report 品牌行简化为 `Powered by Prism Engine`
+- CLI `apply` / `parse` / `run` 命令输出末尾添加 `Powered by Prism Engine`
+- CONTRIBUTING.md Rust 版本修正为 1.88+
+- CONTRIBUTING.md clone URL 修正为 `Juwan-Hwang/Clash-Prism-Engine`
+- `.gitignore` 添加 `*.pdb`
+
+### Fixed
+
+- `cron_scheduler.rs` sleep(0) 无限循环 bug（`.max(0)` → `.max(1)`）
+- CI flaky test（用不存在的日期替代 `* * * * *`）
+- CI cross-check job 禁用（rquickjs-sys 含 C 代码无法交叉编译）
+
 ## [0.1.0] - 2026-04-18
 
 ### Added

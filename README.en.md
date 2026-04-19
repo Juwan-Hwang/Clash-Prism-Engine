@@ -43,7 +43,7 @@ If you're building a mihomo / Clash GUI client (e.g., a Tauri app), embed Prism 
 
 ```toml
 [dependencies]
-clash-prism-extension = "0.1.0"
+clash-prism-extension = "0.1.1"
 ```
 
 Implement the `PrismHost` trait (4 methods) to get full configuration management:
@@ -65,6 +65,12 @@ prism-ext init --output src-tauri/src/
 
 The generated code includes 16 Tauri Commands (`prism_apply`, `prism_list_rules`, `prism_toggle_group`, etc.) ready for your frontend.
 
+Get full execution trace report:
+
+```rust
+let report = ext.trace_report()?;  // Returns text-formatted per-patch change details
+```
+
 ### 2️⃣ Terminal Users / Debugging
 
 `prism-cli` provides a command-line tool for debugging and standalone use:
@@ -72,6 +78,9 @@ The generated code includes 16 Tauri Commands (`prism_apply`, `prism_list_rules`
 ```bash
 # One-shot compile: read config.yaml + all .prism.yaml files in prism/ dir
 prism-cli apply --config ./config.yaml --prism-dir ./prism
+
+# Compile and output full execution trace report (per-patch change details)
+prism-cli apply --config ./config.yaml --prism-dir ./prism --verbose
 
 # Start HTTP server (GUI clients call via API)
 prism-cli serve --port 9097 --config ./config.yaml --prism-dir ./prism

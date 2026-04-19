@@ -54,6 +54,9 @@ enum Command {
         /// 输出格式：human（默认）、ndjson、json
         #[arg(long, default_value = "human")]
         output: String,
+        /// 输出完整执行追踪报告（逐条变更详情）
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
     },
 
     /// 查看 Prism Engine 运行状态
@@ -300,6 +303,7 @@ fn cmd_apply(
     skip_disabled: bool,
     validate: bool,
     output_format: &str,
+    verbose: bool,
 ) -> Result<(), String> {
     let fmt: ndjson::OutputFormat = output_format.parse().map_err(|e: String| e)?;
 
@@ -318,25 +322,32 @@ fn cmd_apply(
 
     match fmt {
         ndjson::OutputFormat::Human => {
-            println!("⚡ Prism Engine Apply\n");
+            if verbose {
+                let report = ext.trace_report().unwrap_or_else(|e| format!("追踪报告生成失败: {}", e));
+                println!("{}", report);
+            } else {
+                println!("⚡ Prism Engine Apply\n");
 
-            println!("📊 编译统计:");
-            println!("  总 Patch 数: {}", result.stats.total_patches);
-            println!("  成功: {}", result.stats.succeeded);
-            println!("  跳过: {}", result.stats.skipped);
-            println!("  新增规则: {}", result.stats.total_added);
-            println!("  删除规则: {}", result.stats.total_removed);
-            println!("  修改规则: {}", result.stats.total_modified);
-            println!(
-                "  总耗时: {}μs (平均 {}μs/patch)",
-                result.stats.total_duration_us, result.stats.avg_duration_us
-            );
-
-            if !result.rule_annotations.is_empty() {
+                println!("📊 编译统计:");
+                println!("  总 Patch 数: {}", result.stats.total_patches);
+                println!("  成功: {}", result.stats.succeeded);
+                println!("  跳过: {}", result.stats.skipped);
+                println!("  新增规则: {}", result.stats.total_added);
+                println!("  删除规则: {}", result.stats.total_removed);
+                println!("  修改规则: {}", result.stats.total_modified);
                 println!(
-                    "\n🏷️  规则注解 ({} 条 Prism 管理的规则):",
-                    result.rule_annotations.len()
+                    "  总耗时: {}μs (平均 {}μs/patch)",
+                    result.stats.total_duration_us, result.stats.avg_duration_us
                 );
+
+                if !result.rule_annotations.is_empty() {
+                    println!(
+                        "\n🏷️  规则注解 ({} 条 Prism 管理的规则):",
+                        result.rule_annotations.len()
+                    );
+                }
+
+                println!("\nPowered by Prism Engine");
             }
         }
         ndjson::OutputFormat::Ndjson => {
@@ -429,6 +440,8 @@ fn cmd_parse(file: PathBuf) -> Result<(), String> {
         }
     }
 
+    println!("\nPowered by Prism Engine");
+
     Ok(())
 }
 
@@ -479,6 +492,8 @@ fn cmd_run(script: PathBuf, config_file: Option<PathBuf>) -> Result<(), String> 
     for log in &result.logs {
         println!("  [{}] {}", log.level, log.message);
     }
+
+    println!("\nPowered by Prism Engine");
 
     Ok(())
 }
@@ -644,7 +659,8 @@ async fn main() -> ExitCode {
             skip_disabled,
             validate,
             output,
-        } => cmd_apply(config, prism_dir, skip_disabled, validate, &output),
+            verbose,
+        } => cmd_apply(config, prism_dir, skip_disabled, validate, &output, verbose),
         Command::Status { prism_dir } => cmd_status(prism_dir).map_err(|e| e.to_string()),
         Command::Serve {
             port,

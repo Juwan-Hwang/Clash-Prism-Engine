@@ -43,7 +43,7 @@ Prism Engine 有两种使用方式：
 
 ```toml
 [dependencies]
-clash-prism-extension = "0.1.0"
+clash-prism-extension = "0.1.1"
 ```
 
 实现 `PrismHost` trait（4 个方法），即可获得完整的配置管理能力：
@@ -65,6 +65,12 @@ prism-ext init --output src-tauri/src/
 
 生成的代码包含 16 个 Tauri Command（`prism_apply`、`prism_list_rules`、`prism_toggle_group` 等），前端直接调用。
 
+获取完整执行追踪报告：
+
+```rust
+let report = ext.trace_report()?;  // 返回文本格式的逐条变更详情
+```
+
 ### 2️⃣ 终端用户 / 调试
 
 `prism-cli` 提供命令行工具，适合调试和独立使用：
@@ -72,6 +78,9 @@ prism-ext init --output src-tauri/src/
 ```bash
 # 一次性编译：读取 config.yaml + prism/ 目录下的所有 .prism.yaml，输出最终配置
 prism-cli apply --config ./config.yaml --prism-dir ./prism
+
+# 编译并输出完整执行追踪报告（逐条变更详情）
+prism-cli apply --config ./config.yaml --prism-dir ./prism --verbose
 
 # 启动 HTTP 服务（GUI 客户端通过 API 调用）
 prism-cli serve --port 9097 --config ./config.yaml --prism-dir ./prism

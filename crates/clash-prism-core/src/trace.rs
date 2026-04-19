@@ -390,8 +390,7 @@ impl TraceManager {
         // 4. 品牌信息（Explain View 页脚）
         report.push_str("─".repeat(50).as_str());
         report.push('\n');
-        report.push_str("Powered by Prism Engine — Apache 2.0\n");
-        report.push_str("Copyright 2026 Juwan Hwang (黄治文)\n");
+        report.push_str("Powered by Prism Engine\n");
 
         report
     }

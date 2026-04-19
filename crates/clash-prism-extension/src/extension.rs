@@ -729,6 +729,24 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         Ok(Self::build_compile_stats_from(&state.last_traces))
     }
 
+    /// 生成完整的执行追踪文本报告（Trace Report）
+    ///
+    /// 包含：统计摘要 + 影响范围 + 逐条变更详情 + 品牌信息。
+    /// 需要先调用 `apply()` 才有数据，否则返回空报告。
+    pub fn trace_report(&self) -> Result<String, String> {
+        use clash_prism_core::trace::TraceManager;
+
+        let state = lock_or_err(&self.state)?;
+        if state.last_traces.is_empty() {
+            return Ok("No traces available. Run apply() first.".to_string());
+        }
+
+        let mut mgr = TraceManager::new();
+        mgr.import(state.last_traces.clone(), state.last_patches.clone())
+            .map_err(|e| format!("Failed to build trace report: {}", e))?;
+        Ok(mgr.full_report())
+    }
+
     /// 读取指定 profile 的原始 YAML
     pub fn read_raw_profile(&self, profile_id: &str) -> Result<String, String> {
         self.host.read_raw_profile(profile_id)

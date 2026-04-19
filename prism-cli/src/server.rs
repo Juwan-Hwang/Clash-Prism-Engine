@@ -436,9 +436,15 @@ async fn api_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let status = state.ext.status();
-    Ok(Json(
-        serde_json::to_value(status).map_err(|e| e.to_string())?,
-    ))
+    let mut value = serde_json::to_value(status).map_err(|e| e.to_string())?;
+    // 嵌入 Powered by 标记，GUI 客户端可在状态页面展示
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "powered_by".to_string(),
+            serde_json::json!("Prism Engine (https://github.com/Juwan-Hwang/Clash-Prism-Engine)"),
+        );
+    }
+    Ok(Json(value))
 }
 
 /// POST /api/apply 请求体（手动解析，避免直接依赖 serde）
@@ -466,9 +472,14 @@ async fn api_apply(
         validate_output: req.validate.unwrap_or(false),
     };
     let result = state.ext.apply(opts)?;
-    Ok(Json(
-        serde_json::to_value(result).map_err(|e| e.to_string())?,
-    ))
+    let mut value = serde_json::to_value(result).map_err(|e| e.to_string())?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "powered_by".to_string(),
+            serde_json::json!("Prism Engine (https://github.com/Juwan-Hwang/Clash-Prism-Engine)"),
+        );
+    }
+    Ok(Json(value))
 }
 
 async fn api_list_rules(
