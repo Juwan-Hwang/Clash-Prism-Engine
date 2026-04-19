@@ -78,19 +78,21 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: '*'
-          merge-multiple: false
 
-      - name: Flatten artifacts directory
+      - name: Flatten and rename artifacts
         run: |
           mkdir -p release
-          find artifacts -type f -exec cp {} release/ \;
+          cp artifacts/prism-cli-x86_64-linux-gnu/prism-cli release/prism-cli-x86_64-linux-gnu 2>/dev/null || true
+          cp artifacts/prism-cli-x86_64-apple-darwin/prism-cli release/prism-cli-x86_64-apple-darwin 2>/dev/null || true
+          cp artifacts/prism-cli-aarch64-apple-darwin/prism-cli release/prism-cli-aarch64-apple-darwin 2>/dev/null || true
+          cp artifacts/prism-cli-x86_64-pc-windows-msvc.exe/prism-cli.exe release/prism-cli-x86_64-pc-windows-msvc.exe 2>/dev/null || true
+          echo "=== Release files ==="
           ls -lh release/
 
       - name: Generate checksums
         run: |
           cd release
-          sha256sum prism-cli-* > checksums-sha256.txt
+          sha256sum * > checksums-sha256.txt
           cat checksums-sha256.txt
 
       - name: Create GitHub Release
