@@ -107,6 +107,8 @@ rules:
   └───────────────────┘
 ```
 
+完整架构设计请参阅 [Prism_Engine_Final_Architecture.md](Prism_Engine_Final_Architecture.md)。
+
 ## Crate 概览
 
 | Crate | 说明 | Crates.io |
@@ -197,6 +199,8 @@ prism-ext init --output src-tauri/src/
 | 常量时间比较 | API key 认证防时序攻击 |
 | HTTP 速率限制 | 滑动窗口 60 req/60s per IP |
 
+安全漏洞请参阅 [SECURITY.md](SECURITY.md)。
+
 ## 项目结构
 
 ```
@@ -213,9 +217,12 @@ Clash-Prism-Engine/
 ├── examples/                   # 使用示例
 ├── tests/                      # 集成测试
 ├── fuzz/                       # Fuzzing targets
-├── benches/                    # Criterion benchmarks
 ├── .github/workflows/          # CI/CD
-└── Prism_Engine_Final_Architecture.md  # 架构规范文档
+├── Prism_Engine_Final_Architecture.md  # 架构规范文档
+├── CHANGELOG.md                # 变更日志
+├── CONTRIBUTING.md             # 贡献指南
+├── SECURITY.md                 # 安全策略
+└── prism-schema.json           # DSL JSON Schema
 ```
 
 ## 构建
@@ -234,6 +241,17 @@ cargo test --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features
 ```
+
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [Prism_Engine_Final_Architecture.md](Prism_Engine_Final_Architecture.md) | 完整架构设计规范（14 章，83 项需求） |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 开发环境搭建与贡献流程 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
+| [SECURITY.md](SECURITY.md) | 安全漏洞报告策略 |
+| [examples/](examples/) | 使用示例（基础用法、插件、Smart Selector） |
+| [prism-schema.json](prism-schema.json) | DSL 文件 JSON Schema（VS Code 高亮） |
 
 ## 许可证
 
