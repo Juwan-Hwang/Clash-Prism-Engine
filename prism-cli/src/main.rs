@@ -323,11 +323,11 @@ fn cmd_apply(
     match fmt {
         ndjson::OutputFormat::Human => {
             if verbose {
-                let report = ext.trace_report().unwrap_or_else(|e| format!("追踪报告生成失败: {}", e));
+                let report = ext
+                    .trace_report()
+                    .unwrap_or_else(|e| format!("追踪报告生成失败: {}", e));
                 println!("{}", report);
             } else {
-                println!("⚡ Prism Engine Apply\n");
-
                 println!("📊 编译统计:");
                 println!("  总 Patch 数: {}", result.stats.total_patches);
                 println!("  成功: {}", result.stats.succeeded);
