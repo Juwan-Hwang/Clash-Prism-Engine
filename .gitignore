@@ -14,6 +14,7 @@ Cargo.lock
 # OS
 Thumbs.db
 Desktop.ini
+*.pdb
 
 # Env
 .env

@@ -1,0 +1,8 @@
+# Clippy configuration for Prism Engine
+# https://doc.rust-lang.org/clippy/configuration.html
+
+# Allow certain pedantic lints that are too noisy for this project
+allow-unicode-in-literals = true
+
+# Warn on all other pedantic lints
+warn-on-all-wildcard-imports = true

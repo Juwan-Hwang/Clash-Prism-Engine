@@ -1,0 +1,7 @@
+# Rustfmt configuration for Prism Engine
+# https://rust-lang.github.io/rustfmt/
+
+edition = "2024"
+max_width = 100
+fn_single_line = true
+where_single_line = true

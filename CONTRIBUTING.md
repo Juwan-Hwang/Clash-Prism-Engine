@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Prism Engine! This document provi
 
 ### Prerequisites
 
-- **Rust**: 1.85+ (see `rust-version` in workspace `Cargo.toml`)
+- **Rust**: 1.88+ (see `rust-version` in workspace `Cargo.toml`)
 - **Cargo**: Bundled with Rust toolchain
 - **Git**: Any recent version
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing to Prism Engine! This document provi
 
 ```bash
 # Clone the repository
-git clone https://github.com/prism-engine/prism-engine.git
-cd prism-engine
+git clone https://github.com/Juwan-Hwang/Clash-Prism-Engine.git
+cd Clash-Prism-Engine
 
 # Build all crates (debug mode)
 cargo build --workspace

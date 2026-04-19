@@ -1603,7 +1603,7 @@ pub fn format_user_facing_error(err: &PrismError) -> UserError;
 - [x] 用户友好错误格式化（9 类错误 + 修复建议）
 - [x] NDJSON 输出（U+2028/U+2029 转义 + 流式 Writer）
 - [x] PID 文件锁（跨进程互斥 + 过期检测 + RAII 自动释放）
-- [ ] 发布 `clash-prism-extension` crate 到 crates.io
+- [x] 发布 `clash-prism-extension` crate 到 crates.io
 - [x] CHANGELOG + SemVer 版本管理
 - [x] Fuzzing targets（DSL parser / expression evaluator / YAML round-trip）
 - [x] Criterion benchmarks（parser / predicate / transform / full pipeline）
