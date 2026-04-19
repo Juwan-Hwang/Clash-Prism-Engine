@@ -261,4 +261,8 @@ Apache License, Version 2.0 — 详见 [LICENSE](LICENSE)
 
 - [mihomo](https://github.com/MetaCubeX/mihomo) — Clash Meta 内核
 - [QuickJS-NG](https://github.com/nicknisi/quickjs-ng) — JavaScript 引擎
-- [rquickjs](https://github.com/nicknisi/quickjs-ng) — QuickJS Rust 绑定
+- [rquickjs](https://github.com/DelSkayn/rquickjs) — QuickJS Rust 绑定
+
+---
+
+[English](README.en.md) | 简体中文
