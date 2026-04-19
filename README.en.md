@@ -8,66 +8,174 @@
 
 > **Prism**: Multiple input sources refracted through a unified intermediate layer, producing precise, traceable final configurations.
 
-**Prism Engine** is a pure Rust configuration enhancement engine designed for [mihomo](https://github.com/MetaCubeX/mihomo) / Clash kernels. Through a unified **Patch IR** intermediate representation, it compiles DSL declarations, JavaScript scripts, plugin systems, and other input sources into deterministic configuration transformations, enabling traceable, debuggable, and reproducible proxy configuration management.
+## What is it?
 
-## Features
+**Prism Engine** is a pure Rust **configuration enhancement engine for mihomo / Clash**.
 
-- **8 DSL Operations** — `$override` / `$prepend` / `$append` / `$filter` / `$transform` / `$remove` / `$default` / Deep Merge, with fixed execution order
-- **Unified Patch IR** — All inputs compiled into a unified intermediate representation with Explain View field tracing and Step Replay
-- **JavaScript Script Engine** — rquickjs (QuickJS-NG) sandbox, ES2023+ support, 5-layer static validation + 5-layer runtime hardening
-- **Plugin System** — 6 component types (patches / scripts / hooks / templates / scorers / validators), 8+1 lifecycle hooks
-- **Smart Selector** — Standalone runtime module with EMA scoring (P90 latency + success rate + stability), adaptive speed testing scheduler
-- **4-Layer Scope** — Global → Profile → Scoped → Runtime, Profile-level concurrent execution
-- **GUI Integration** — `PrismHost` trait, ~100 lines of code to integrate with Tauri / Electron clients
-- **Debug System** — Diff View / Trace View / Explain View / Step Replay / PerfTracker
-- **Security in Depth** — Path traversal protection, ReDoS protection, prototype pollution prevention, constant-time API key comparison, atomic file writes
+It solves a core problem: **how to manage and transform proxy configurations declaratively, instead of manually editing large YAML files.**
 
-## Quick Start
+### Typical Use Cases
 
-### Add Dependencies
+- You have multiple `.prism.yaml` files managing rules, proxies, DNS, etc. separately
+- You want to automatically switch configurations based on conditions (platform, time, WiFi)
+- You're developing a mihomo GUI client and need an embeddable configuration engine
+- You need full traceability of configuration changes (what changed, how many rules affected)
+
+### What can it do?
+
+| Capability | Description |
+|------------|-------------|
+| 📝 **Declarative Config** | Describe "what you want" in `.prism.yaml` DSL, the engine computes the final config |
+| 🔀 **8 Operations** | `$filter` / `$remove` / `$transform` / `$default` / `$prepend` / `$append` / Deep Merge / `$override` |
+| 📊 **Change Tracking** | Precise stats per compilation: +N rules, -M rules, ~K modifications |
+| 🔌 **Plugin System** | JavaScript scripts + plugin system for custom logic |
+| 🖥️ **GUI Integration** | `PrismHost` trait — ~100 lines to integrate into Tauri / Electron clients |
+| 🌐 **HTTP API** | Built-in REST server for GUI clients to call the engine via API |
+| 👁️ **File Watching** | Auto-watch `.prism.yaml` changes and recompile in real-time |
+
+## Who uses it?
+
+Prism Engine has two usage patterns:
+
+### 1️⃣ GUI Developers (Primary Users)
+
+If you're building a mihomo / Clash GUI client (e.g., a Tauri app), embed Prism Engine as a library:
 
 ```toml
 [dependencies]
-clash-prism-core = "0.1.0"
-clash-prism-dsl = "0.1.0"
+clash-prism-extension = "0.1.0"
 ```
 
-### Basic Usage
+Implement the `PrismHost` trait (4 methods) to get full configuration management:
 
 ```rust
-use clash_prism_core::{PatchCompiler, PatchExecutor, TargetCompiler};
-use clash_prism_dsl::DslParser;
-
-// 1. Parse DSL file
-let dsl = DslParser::parse_file("rules.prism.yaml")?;
-
-// 2. Compile to Patch IR
-let mut compiler = PatchCompiler::new();
-compiler.register_dsl_patches(&dsl)?;
-let patches = compiler.compile_and_execute(base_config.clone())?;
-
-// 3. Output target format
-let output = TargetCompiler::to_mihomo_yaml(&patches.output)?;
+pub trait PrismHost: Send + Sync {
+    fn read_running_config(&self) -> Result<String>;       // Read current config
+    fn apply_config(&self, config: &str, status: &ApplyStatus) -> Result<()>;  // Write config
+    fn get_prism_workspace(&self) -> Result<PathBuf>;      // Get workspace directory
+    fn notify(&self, event: PrismEvent);                   // Receive event notifications
+}
 ```
 
-### Prism DSL Example
+Use the scaffolding tool to generate adapter code in one command:
+
+```bash
+prism-ext init --output src-tauri/src/
+```
+
+The generated code includes 16 Tauri Commands (`prism_apply`, `prism_list_rules`, `prism_toggle_group`, etc.) ready for your frontend.
+
+### 2️⃣ Terminal Users / Debugging
+
+`prism-cli` provides a command-line tool for debugging and standalone use:
+
+```bash
+# One-shot compile: read config.yaml + all .prism.yaml files in prism/ dir
+prism-cli apply --config ./config.yaml --prism-dir ./prism
+
+# Start HTTP server (GUI clients call via API)
+prism-cli serve --port 9097 --config ./config.yaml --prism-dir ./prism
+
+# Validate DSL syntax
+prism-cli check rules.prism.yaml
+
+# Parse and preview Patch IR
+prism-cli parse rules.prism.yaml
+
+# Execute JavaScript script
+prism-cli run script.js --config ./config.yaml
+
+# Watch file changes and auto-recompile
+prism-cli watch ./prism --output ./config.yaml
+
+# View engine status
+prism-cli status --prism-dir ./prism
+```
+
+## DSL Example
+
+Say your mihomo `config.yaml` has 100 proxy nodes and you want to:
+
+1. Keep only SS-type US nodes
+2. Insert your own proxy at the top
+3. Add company direct-connect rules at the beginning
+
+Create `prism/rules.prism.yaml`:
 
 ```yaml
-# rules.prism.yaml
 proxies:
+  # Step 1: Filter — keep only SS nodes with "US" in server name
   $filter: "type == 'ss' && server.contains('US')"
+
+  # Step 2: Prepend — add your proxy at the top
   $prepend:
     - name: "my-ss-proxy"
       type: ss
       server: us1.example.com
       port: 8388
+      cipher: aes-256-gcm
+      password: "your-password"
 
 rules:
+  # Step 3: Prepend — company domain direct connect
   $prepend:
-    - "DOMAIN-SUFFIX,example.com,DIRECT"
+    - "DOMAIN-SUFFIX,company.com,DIRECT"
+
+  # Step 4: Append — catch-all rule
   $append:
     - "MATCH,Proxy"
 ```
+
+Run the compilation:
+
+```bash
+prism-cli apply --config ./config.yaml --prism-dir ./prism
+```
+
+Output:
+
+```
+⚡ Prism Engine Apply
+
+📊 Compile stats:
+  Total patches: 3
+  Succeeded: 3
+  Skipped: 0
+  Rules added: 2
+  Rules removed: 0
+  Rules modified: 0
+  Total time: 142μs (avg 47μs/patch)
+```
+
+The final `config.yaml` is automatically updated: filtered proxy list + your custom proxy + new rule order.
+
+## Conditional Scopes
+
+Automatically apply different configurations based on platform, time, WiFi, etc.:
+
+```yaml
+__when__:
+  platform: windows
+  ssid: "Office-WiFi"
+  time: "09:00-18:00"
+
+proxies:
+  $prepend:
+    - name: "work-proxy"
+      type: ss
+      server: proxy.company.com
+      port: 8388
+```
+
+## Features
+
+- **8 DSL Operations** — Fixed execution order: `$filter` → `$remove` → `$transform` → `$default` → `$prepend` → `$append` → Deep Merge → `$override`
+- **Unified Patch IR** — All inputs compiled into a unified intermediate representation with field tracing and step replay
+- **JavaScript Script Engine** — rquickjs (QuickJS-NG) sandbox, ES2023+, 5-layer static validation + 5-layer runtime hardening
+- **Plugin System** — 6 component types (patches / scripts / hooks / templates / scorers / validators), 8+1 lifecycle hooks
+- **Smart Selector** — EMA scoring (P90 latency + success rate + stability), adaptive speed testing scheduler
+- **4-Layer Scope** — Global → Profile → Scoped → Runtime, Profile-level concurrent execution
+- **Security in Depth** — Path traversal protection, ReDoS protection, prototype pollution prevention, constant-time API key comparison, atomic file writes
 
 ## Architecture
 
@@ -113,16 +221,16 @@ For the complete architecture design, see [Prism_Engine_Final_Architecture.md](P
 
 | Crate | Description | Crates.io |
 |-------|-------------|-----------|
-| `clash-prism-core` | Core engine: Patch IR, compiler, executor, validator, cache, file watcher | [![crates.io](https://img.shields.io/crates/v/clash-prism-core.svg)](https://crates.io/crates/clash-prism-core) |
-| `clash-prism-dsl` | DSL parser: `.prism.yaml` parsing, static field validation, JSON Schema | [![crates.io](https://img.shields.io/crates/v/clash-prism-dsl.svg)](https://crates.io/crates/clash-prism-dsl) |
-| `clash-prism-script` | Script engine: rquickjs sandbox, structured API, KV storage | [![crates.io](https://img.shields.io/crates/v/clash-prism-script.svg)](https://crates.io/crates/clash-prism-script) |
-| `clash-prism-smart` | Smart selector: EMA scoring, time decay, adaptive speed testing | [![crates.io](https://img.shields.io/crates/v/clash-prism-smart.svg)](https://crates.io/crates/clash-prism-smart) |
-| `clash-prism-plugin` | Plugin system: lifecycle hooks, multi-component architecture, Cron scheduling | [![crates.io](https://img.shields.io/crates/v/clash-prism-plugin.svg)](https://crates.io/crates/clash-prism-plugin) |
-| `clash-prism-extension` | GUI integration: PrismHost trait, rule annotations, JSON API | [![crates.io](https://img.shields.io/crates/v/clash-prism-extension.svg)](https://crates.io/crates/clash-prism-extension) |
-| `prism-cli` | CLI tool: apply / status / serve / watch | Binary distribution |
-| `prism-ext` | Scaffolding tool: `prism-ext init` generates adapter templates | Binary distribution |
+| `clash-prism-core` | Core engine: Patch IR, compiler, executor, validator, cache, file watcher | [![cr](https://img.shields.io/crates/v/clash-prism-core.svg)](https://crates.io/crates/clash-prism-core) |
+| `clash-prism-dsl` | DSL parser: `.prism.yaml` parsing, static field validation, JSON Schema | [![cr](https://img.shields.io/crates/v/clash-prism-dsl.svg)](https://crates.io/crates/clash-prism-dsl) |
+| `clash-prism-script` | Script engine: rquickjs sandbox, structured API, KV storage | [![cr](https://img.shields.io/crates/v/clash-prism-script.svg)](https://crates.io/crates/clash-prism-script) |
+| `clash-prism-smart` | Smart selector: EMA scoring, time decay, adaptive speed testing | [![cr](https://img.shields.io/crates/v/clash-prism-smart.svg)](https://crates.io/crates/clash-prism-smart) |
+| `clash-prism-plugin` | Plugin system: lifecycle hooks, multi-component architecture, Cron scheduling | [![cr](https://img.shields.io/crates/v/clash-prism-plugin.svg)](https://crates.io/crates/clash-prism-plugin) |
+| `clash-prism-extension` | GUI integration: PrismHost trait, rule annotations, JSON API | [![cr](https://img.shields.io/crates/v/clash-prism-extension.svg)](https://crates.io/crates/clash-prism-extension) |
+| `prism-cli` | CLI tool: apply / serve / watch / parse / check / run | [Binaries](https://github.com/Juwan-Hwang/Clash-Prism-Engine/releases) |
+| `prism-ext` | Scaffolding tool: `prism-ext init` generates GUI adapter templates | [Binaries](https://github.com/Juwan-Hwang/Clash-Prism-Engine/releases) |
 
-## DSL Operations
+## DSL Operations Reference
 
 | Operation | Syntax | Description |
 |-----------|--------|-------------|
@@ -134,25 +242,6 @@ For the complete architecture design, see [Prism_Engine_Final_Architecture.md](P
 | `$transform` | `$transform: {...}` | Map transformation |
 | `$remove` | `$remove: "expr"` | Conditional removal |
 | `$default` | `$default: {...}` | Default value injection |
-
-**Fixed execution order**: `$filter` → `$remove` → `$transform` → `$default` → `$prepend` → `$append` → Deep Merge → `$override`
-
-## Conditional Scopes
-
-```yaml
-__when__:
-  core: mihomo
-  platform: windows
-  profile: "work*"
-  time: "09:00-18:00"
-  enabled: true
-  ssid: "Office-WiFi"
-
-proxies:
-  $prepend:
-    - name: "work-proxy"
-      ...
-```
 
 ## Plugin Development
 
@@ -166,25 +255,6 @@ proxies:
   "hooks": ["OnMerged", "OnBeforeWrite"],
   "entry": "main.js"
 }
-```
-
-## GUI Integration
-
-Prism Engine integrates with GUI clients via the `PrismHost` trait. Only 4 required methods:
-
-```rust
-pub trait PrismHost: Send + Sync {
-    fn read_running_config(&self) -> Result<String>;
-    fn apply_config(&self, config: &str, status: &ApplyStatus) -> Result<()>;
-    fn get_prism_workspace(&self) -> Result<PathBuf>;
-    fn notify(&self, event: PrismEvent);
-}
-```
-
-Scaffolding tool for quick adapter generation:
-
-```bash
-prism-ext init --output src-tauri/src/
 ```
 
 ## Security
@@ -223,23 +293,6 @@ Clash-Prism-Engine/
 ├── CONTRIBUTING.md             # Contributing guide
 ├── SECURITY.md                 # Security policy
 └── prism-schema.json           # DSL JSON Schema
-```
-
-## Build
-
-```bash
-# Debug
-cargo build --workspace
-
-# Release
-cargo build -p prism-cli --release
-
-# Test
-cargo test --workspace
-
-# Lint
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features
 ```
 
 ## Documentation
