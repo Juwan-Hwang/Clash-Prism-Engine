@@ -241,7 +241,7 @@ mod tests {
         // quality 中等 → 100 * 1.625 = 162.5 → 162, 在 [50, 200] 内
         let mid = scheduler.next_interval(0.6);
         assert!(
-            mid >= 50 && mid <= 200,
+            (50..=200).contains(&mid),
             "中等质量间隔应在 [min, max] 范围内，实际: {mid}"
         );
     }

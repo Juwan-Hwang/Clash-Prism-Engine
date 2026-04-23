@@ -708,7 +708,7 @@ fn test_e2e_conditional_scope_platform() {
             ..Default::default()
         });
     let result_match = executor_match
-        .execute_owned(base_config.clone(), &[scoped_patch.clone()])
+        .execute_owned(base_config.clone(), std::slice::from_ref(&scoped_patch))
         .unwrap();
     assert_eq!(
         result_match["rules"][0], "DOMAIN-SUFFIX,apple.com,PROXY",
@@ -958,7 +958,7 @@ fn test_e2e_default_nested_path_injection() {
     let base_empty = serde_json::json!({"dns": {"enable": true}});
     let mut executor = PatchExecutor::new();
     let result = executor
-        .execute_owned(base_empty, &[patch.clone()])
+        .execute_owned(base_empty, std::slice::from_ref(&patch))
         .unwrap();
     assert_eq!(result["dns"]["nameservers"][0], "1.1.1.1");
 
@@ -1207,19 +1207,19 @@ proxies:
 
 #[test]
 fn test_e2e_concurrent_profile_execution() {
-    let profile_a_patches = vec![make_patch(
+    let profile_a_patches = [make_patch(
         "dns",
         PatchOp::DeepMerge,
         serde_json::json!({"profile": "A"}),
         Scope::Profile("profile-a".to_string()),
     )];
-    let profile_b_patches = vec![make_patch(
+    let profile_b_patches = [make_patch(
         "mode",
         PatchOp::DeepMerge,
         serde_json::json!("direct"),
         Scope::Profile("profile-b".to_string()),
     )];
-    let shared_patches = vec![make_patch(
+    let shared_patches = [make_patch(
         "log-level",
         PatchOp::DeepMerge,
         serde_json::json!("info"),
@@ -1392,7 +1392,7 @@ fn test_e2e_ssid_condition_matching() {
             ..Default::default()
         });
     let result = executor_match
-        .execute_owned(base_config.clone(), &[patch.clone()])
+        .execute_owned(base_config.clone(), std::slice::from_ref(&patch))
         .unwrap();
     assert_eq!(result["rules"][0], "DOMAIN,home.local,DIRECT");
     assert!(executor_match.traces[0].condition_matched);

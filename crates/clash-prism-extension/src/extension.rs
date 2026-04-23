@@ -859,17 +859,15 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
             };
 
             // 缓存命中：复用上次解析的 Patches
-            if let Some(cached_hash) = cached_hashes.get(file_name) {
-                if *cached_hash == hash {
-                    if let Ok(cache) = lock_or_err(&self.parse_cache) {
-                        if let Some((_, cached_patches)) = cache.get(file_name) {
-                            compiler
-                                .register_patches(file_name.clone(), cached_patches.clone())
-                                .map_err(|e| format!("Patch 注册错误 [{}]: {}", file_name, e))?;
-                            continue;
-                        }
-                    }
-                }
+            if let Some(cached_hash) = cached_hashes.get(file_name)
+                && *cached_hash == hash
+                && let Ok(cache) = lock_or_err(&self.parse_cache)
+                && let Some((_, cached_patches)) = cache.get(file_name)
+            {
+                compiler
+                    .register_patches(file_name.clone(), cached_patches.clone())
+                    .map_err(|e| format!("Patch 注册错误 [{}]: {}", file_name, e))?;
+                continue;
             }
 
             // 缓存未命中：重新解析
@@ -882,11 +880,11 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         }
 
         // 更新解析缓存
-        if !new_cache_entries.is_empty() {
-            if let Ok(mut cache) = lock_or_err(&self.parse_cache) {
-                for (name, entry) in new_cache_entries {
-                    cache.insert(name, entry);
-                }
+        if !new_cache_entries.is_empty()
+            && let Ok(mut cache) = lock_or_err(&self.parse_cache)
+        {
+            for (name, entry) in new_cache_entries {
+                cache.insert(name, entry);
             }
         }
 
@@ -968,7 +966,7 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         // 回退：从未成功编译过，重新计算
         Ok(extract_rule_annotations(
             &state.last_traces,
-            &*state.last_output,
+            &state.last_output,
         ))
     }
 

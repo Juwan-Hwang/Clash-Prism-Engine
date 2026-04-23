@@ -158,7 +158,9 @@ impl PluginManifest {
         }
 
         // 3. Component 级别路径遍历检查（统一检查，替代冗余的字符串级别检查）
-        if entry_path.is_absolute() {
+        //    同时检测 Unix 风格绝对路径（/etc/passwd），
+        //    因为 Path::new("/etc/passwd").is_absolute() 在 Windows 上返回 false。
+        if entry_path.is_absolute() || self.entry.starts_with('/') {
             errors.push(format!(
                 "入口文件「{}」不允许使用绝对路径，请使用相对于插件目录的文件名",
                 self.entry
