@@ -878,7 +878,7 @@ impl PatchExecutor {
 
             // 第二遍：使用 retain 原地过滤（避免构建新 Vec）
             let mut eval_iter = eval_results.into_iter();
-            items.retain(|_| eval_iter.next().map_or(true, |(_, keep, _)| keep));
+            items.retain(|_| eval_iter.next().is_none_or(|(_, keep, _)| keep));
         }
 
         let total_after = kept_count;
@@ -1082,7 +1082,7 @@ impl PatchExecutor {
 
             // 第二遍：使用 retain 原地过滤（避免构建新 Vec）
             let mut eval_iter = eval_results.into_iter();
-            items.retain(|_| eval_iter.next().map_or(true, |(_, keep, _)| keep));
+            items.retain(|_| eval_iter.next().is_none_or(|(_, keep, _)| keep));
 
             let total_after = kept_count;
             let trace = ExecutionTrace::new(

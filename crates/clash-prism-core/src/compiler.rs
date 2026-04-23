@@ -475,14 +475,14 @@ pub fn compile_and_execute_pipeline(
         let mut patch_group: HashMap<String, &str> = HashMap::new();
         for (group_name, patches) in &profile_groups {
             for p in patches {
-                patch_group.insert((*p).id.to_string(), group_name.as_str());
+                patch_group.insert(p.id.to_string(), group_name.as_str());
             }
         }
 
         // Check each profile patch's dependencies
         for (group_name, patches) in &profile_groups {
             for p in patches {
-                for dep in &(*p).after {
+                for dep in &p.after {
                     let dep_target = match dep {
                         DependencyRef::PatchId(id) => id.as_str(),
                         DependencyRef::FileName(name) => {
@@ -547,7 +547,7 @@ pub fn compile_and_execute_pipeline(
     {
         // 构建 shared patch 的 ID 集合，用于快速查找
         let shared_patch_ids: std::collections::HashSet<&str> =
-            shared_patches.iter().map(|p| (*p).id.as_str()).collect();
+            shared_patches.iter().map(|p| p.id.as_str()).collect();
 
         for (group_name, patches) in &profile_groups {
             for p in patches {
