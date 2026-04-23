@@ -1478,6 +1478,37 @@ L3 分布式缓存（接口预留）
   └── 基于 redb KV，接口已规划但未实现
 ```
 
+#### Extension 层缓存（extension.rs）
+
+针对 GUI 集成场景的大规模规则优化（v0.1.2 新增）：
+
+```
+Annotation 缓存
+  ├── apply() 成功后缓存 rule_annotations 到 ExtensionState 和 WatchResult
+  ├── get_current_annotations() 优先从缓存读取，O(A×R) → O(1)
+  └── 基于 compile_success 标志判断缓存有效性
+
+文件级解析缓存
+  ├── SHA-256 内容哈希比对，未变更文件跳过 DSL 解析
+  ├── 缓存存储：HashMap<String, (hash, Vec<Patch>)>
+  └── 重复编译速度提升 50-70%
+
+output_config Arc 共享
+  ├── ExtensionState.last_output 和 WatchResult.output 共享同一 Arc<Value>
+  └── 省掉一次数 MB 的 JSON 深拷贝
+
+is_prism_rule HashMap 索引
+  ├── HashMap<usize, usize>：index_in_output → annotations Vec 索引
+  └── O(N) 线性扫描 → O(1) 查询
+
+Patch 引用传递
+  ├── execute() / execute_pipeline() 签名改为 &[&Patch]
+  ├── compile_and_execute_pipeline() 中按 scope 分类时使用引用
+  └── execute_owned() 便捷方法保持向后兼容
+```
+
+**设计原则**：所有缓存都有明确的失效时机（apply 成功更新、insert_rule 清空），不会出现缓存与实际数据不一致的情况。
+
 ```rust
 /// 基于文件内容哈希的缓存键（内容寻址）
 pub fn compile_cache_key(file_path: &Path) -> Result<String, String>;
@@ -1562,6 +1593,7 @@ pub fn format_user_facing_error(err: &PrismError) -> UserError;
 - [x] Trace View（变更来源追踪）
 - [x] Explain View（字段溯源查询）
 - [x] 性能追踪器（PerfTracker，高阶函数 + 人类可读报告）
+- [x] 大规模规则性能优化（Annotation 缓存、文件级解析缓存、Arc 共享、HashMap 索引、retain 原地过滤、Patch 引用传递）
 
 ### Phase 3: 脚本与插件（2-3 周）
 

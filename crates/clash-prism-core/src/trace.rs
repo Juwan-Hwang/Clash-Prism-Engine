@@ -1129,4 +1129,166 @@ mod tests {
         // 原始字段不受影响
         assert_eq!(config_a["mixed-port"], 7890);
     }
+
+    #[test]
+    fn test_replay_out_of_range() {
+        let mgr = TraceManager::new();
+        let base_config = serde_json::json!({});
+        let context = crate::executor::ExecutionContext::default();
+        assert!(
+            mgr.replay_at_step(0, &base_config, &context).is_none(),
+            "空 TraceManager 调用 replay_at_step(0) 应返回 None"
+        );
+    }
+
+    #[test]
+    fn test_replay_step_exceeds_length() {
+        let mut mgr = TraceManager::new();
+        mgr.push(
+            make_test_trace(
+                "only",
+                None,
+                PatchOp::DeepMerge,
+                true,
+                TraceSummary::new(0, 0, 0, 0, 0, 0),
+            ),
+            Patch::new(
+                crate::source::PatchSource {
+                    kind: SourceKind::Builtin,
+                    file: None,
+                    line: None,
+                    plugin_id: None,
+                },
+                crate::scope::Scope::Global,
+                "dns",
+                PatchOp::DeepMerge,
+                serde_json::json!({}),
+            ),
+        );
+        let base_config = serde_json::json!({});
+        let context = crate::executor::ExecutionContext::default();
+        // 只有 1 个 trace (index 0)，请求 index 1 应返回 None
+        assert!(
+            mgr.replay_at_step(1, &base_config, &context).is_none(),
+            "有 1 个 trace 时调用 replay_at_step(1) 应返回 None"
+        );
+    }
+
+    #[test]
+    fn test_import_length_mismatch() {
+        let mut mgr = TraceManager::new();
+        let trace = make_test_trace(
+            "1",
+            None,
+            PatchOp::DeepMerge,
+            true,
+            TraceSummary::new(0, 0, 0, 0, 0, 0),
+        );
+        let patch = Patch::new(
+            crate::source::PatchSource {
+                kind: SourceKind::Builtin,
+                file: None,
+                line: None,
+                plugin_id: None,
+            },
+            crate::scope::Scope::Global,
+            "dns",
+            PatchOp::DeepMerge,
+            serde_json::json!({}),
+        );
+        // 1 个 trace + 2 个 patches → 长度不一致
+        let result = mgr.import(vec![trace], vec![patch.clone(), patch]);
+        assert!(result.is_err(), "traces 和 configs 长度不一致时应返回 Err");
+    }
+
+    #[test]
+    fn test_statistics_total_removed_zero() {
+        let mut mgr = TraceManager::new();
+        // 只添加 added 操作，没有 removed
+        mgr.push(
+            make_test_trace(
+                "1",
+                None,
+                PatchOp::Append,
+                true,
+                TraceSummary::new(3, 0, 0, 0, 0, 3),
+            ),
+            Patch::new(
+                crate::source::PatchSource {
+                    kind: SourceKind::Builtin,
+                    file: None,
+                    line: None,
+                    plugin_id: None,
+                },
+                crate::scope::Scope::Global,
+                "rules",
+                PatchOp::Append,
+                serde_json::json!([]),
+            ),
+        );
+        mgr.push(
+            make_test_trace(
+                "2",
+                None,
+                PatchOp::Prepend,
+                true,
+                TraceSummary::new(2, 0, 1, 0, 0, 2),
+            ),
+            Patch::new(
+                crate::source::PatchSource {
+                    kind: SourceKind::Builtin,
+                    file: None,
+                    line: None,
+                    plugin_id: None,
+                },
+                crate::scope::Scope::Global,
+                "rules",
+                PatchOp::Prepend,
+                serde_json::json!([]),
+            ),
+        );
+        let stats = mgr.statistics();
+        assert_eq!(
+            stats.total_removed, 0,
+            "没有 remove 操作时 total_removed 应为 0"
+        );
+    }
+
+    #[test]
+    fn test_statistics_avg_duration() {
+        let mut mgr = TraceManager::new();
+        // 3 个 succeeded trace，duration 分别为 100、200、300 → total=600, avg=200
+        for duration in [100u64, 200, 300] {
+            let mut trace = make_test_trace(
+                "x",
+                None,
+                PatchOp::DeepMerge,
+                true,
+                TraceSummary::new(0, 0, 0, 0, 0, 0),
+            );
+            trace.duration_us = duration;
+            mgr.push(
+                trace,
+                Patch::new(
+                    crate::source::PatchSource {
+                        kind: SourceKind::Builtin,
+                        file: None,
+                        line: None,
+                        plugin_id: None,
+                    },
+                    crate::scope::Scope::Global,
+                    "dns",
+                    PatchOp::DeepMerge,
+                    serde_json::json!({}),
+                ),
+            );
+        }
+        let stats = mgr.statistics();
+        assert_eq!(stats.succeeded, 3);
+        assert_eq!(stats.total_duration_us, 600);
+        assert_eq!(
+            stats.avg_duration_us, 200,
+            "avg_duration_us 应等于 total_duration_us / succeeded"
+        );
+    }
 }

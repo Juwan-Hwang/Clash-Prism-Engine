@@ -1090,12 +1090,14 @@ mod tests {
         });
 
         let result = compiler.compile(&config).unwrap();
-        // tun.device should be removed for clash-rs
-        assert!(!result.contains("device"));
-        // tun.stack should be renamed to tun.interface-name
-        assert!(result.contains("interface-name"));
-        // tun.enable should remain
-        assert!(result.contains("enable"));
+        let parsed: serde_yml::Value = serde_yml::from_str(&result).unwrap();
+        let tun = &parsed["tun"];
+        assert!(tun.get("device").is_none(), "tun.device 应被移除");
+        assert!(
+            tun.get("interface-name").is_some(),
+            "tun.interface-name 应存在"
+        );
+        assert!(tun.get("enable").is_some(), "tun.enable 应存在");
     }
 
     #[test]

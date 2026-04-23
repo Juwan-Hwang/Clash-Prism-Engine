@@ -521,7 +521,11 @@ async fn api_toggle_group(
     if group_id.len() > 256 {
         return Err(ApiError("group_id 长度不能超过 256 字符".to_string()));
     }
-    if group_id.contains('/') || group_id.contains('\\') || group_id.contains("..") {
+    if group_id.contains('/')
+        || group_id.contains('\\')
+        || group_id.contains("..")
+        || group_id.contains('\0')
+    {
         return Err(ApiError("group_id 不能包含路径分隔符或 '..'".to_string()));
     }
 

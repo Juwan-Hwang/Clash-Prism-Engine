@@ -26,7 +26,7 @@ fn lock_or_err<T>(mutex: &std::sync::Mutex<T>) -> Result<std::sync::MutexGuard<'
 #[derive(Debug)]
 struct ExtensionState {
     last_traces: Vec<clash_prism_core::trace::ExecutionTrace>,
-    last_output: serde_json::Value,
+    last_output: std::sync::Arc<serde_json::Value>,
     last_patches: Vec<Patch>,
     last_compile_time: Option<chrono::DateTime<chrono::Local>>,
     last_compile_success: bool,
@@ -34,17 +34,25 @@ struct ExtensionState {
     /// 当此标志为 true 时，is_prism_rule() 对无注解匹配的规则返回 `user_custom: true`，
     /// 而非简单地标记为非 Prism 规则，使调用方能区分"从未编译过"和"用户手动插入了规则"。
     user_rules_inserted: bool,
+    last_annotations: Vec<crate::types::RuleAnnotation>,
+    annotation_index: std::collections::HashMap<usize, usize>,
 }
+
+/// 文件级解析缓存（SHA-256 内容哈希 → parsed patches）
+/// 独立于 ExtensionState，通过 Arc 共享给 watcher 线程，避免重复解析。
+type ParseCache = std::collections::HashMap<String, (String, Vec<Patch>)>;
 
 impl Default for ExtensionState {
     fn default() -> Self {
         Self {
             last_traces: Vec::new(),
-            last_output: serde_json::Value::Null,
+            last_output: std::sync::Arc::new(serde_json::Value::Null),
             last_patches: Vec::new(),
             last_compile_time: None,
             last_compile_success: false,
             user_rules_inserted: false,
+            last_annotations: Vec::new(),
+            annotation_index: std::collections::HashMap::new(),
         }
     }
 }
@@ -53,10 +61,11 @@ impl Default for ExtensionState {
 #[derive(Debug, Clone)]
 struct WatchResult {
     traces: Vec<clash_prism_core::trace::ExecutionTrace>,
-    output: serde_json::Value,
+    output: std::sync::Arc<serde_json::Value>,
     patches: Vec<Patch>,
     compile_time: chrono::DateTime<chrono::Local>,
     compile_success: bool,
+    annotations: Vec<crate::types::RuleAnnotation>,
 }
 
 /// Prism Extension 主入口
@@ -75,6 +84,8 @@ pub struct PrismExtension<H: PrismHost> {
     state: std::sync::Mutex<ExtensionState>,
     /// Watcher 线程编译结果共享状态，用于解决 watcher 创建独立实例导致的状态不同步问题
     watcher_result: Arc<std::sync::Mutex<Option<WatchResult>>>,
+    /// 文件级解析缓存，通过 Arc 共享给 watcher 线程
+    parse_cache: Arc<std::sync::Mutex<ParseCache>>,
     #[cfg(feature = "watcher")]
     watcher_running: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "watcher")]
@@ -87,18 +98,24 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
     }
 
     fn new_host_only(host: Arc<H>) -> Self {
-        Self::new_with_shared(host, Arc::new(std::sync::Mutex::new(None)))
+        Self::new_with_shared(
+            host,
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::Mutex::new(ParseCache::new())),
+        )
     }
 
-    /// 使用共享的 watcher_result 创建实例（用于 watcher 线程状态同步）
+    /// 使用共享的 watcher_result 和 parse_cache 创建实例（用于 watcher 线程状态同步）
     fn new_with_shared(
         host: Arc<H>,
         watcher_result: Arc<std::sync::Mutex<Option<WatchResult>>>,
+        parse_cache: Arc<std::sync::Mutex<ParseCache>>,
     ) -> Self {
         Self {
             host,
             state: std::sync::Mutex::new(ExtensionState::default()),
             watcher_result,
+            parse_cache,
             #[cfg(feature = "watcher")]
             watcher_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(feature = "watcher")]
@@ -139,12 +156,13 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         let workspace = self.host.get_prism_workspace()?;
 
         // Step 3: 编译管道
-        let (output_config, traces, patches) =
+        let (raw_output, traces, patches) =
             self.compile_pipeline(base_config, workspace.as_path(), &options)?;
+        let output_config = std::sync::Arc::new(raw_output);
 
         // Step 4: 序列化输出配置
         let output_yaml =
-            serde_yml::to_string(&output_config).map_err(|e| format!("配置序列化失败: {}", e))?;
+            serde_yml::to_string(&*output_config).map_err(|e| format!("配置序列化失败: {}", e))?;
 
         // Step 5: 提取规则注解
         let rule_annotations = extract_rule_annotations(&traces, &output_config);
@@ -191,6 +209,12 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
             state.last_output = output_config.clone();
             state.last_patches = patches.clone();
             state.user_rules_inserted = false;
+            state.last_annotations = rule_annotations.clone();
+            state.annotation_index = rule_annotations
+                .iter()
+                .enumerate()
+                .map(|(i, a)| (a.index_in_output, i))
+                .collect();
         }
 
         // 同步写入 watcher_result（watcher 线程和主线程共享此状态）
@@ -202,6 +226,7 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
                     patches,
                     compile_time: chrono::Local::now(),
                     compile_success: true,
+                    annotations: rule_annotations.clone(),
                 });
             }
             Err(e) => {
@@ -266,29 +291,27 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
     /// 2. `is_prism: false, user_custom: true` — 用户通过 `insert_rule()` 手动插入的自定义规则
     /// 3. `is_prism: false, user_custom: false` — 非 Prism 规则（从未编译过或规则索引超出范围）
     pub fn is_prism_rule(&self, index: usize) -> Result<IsPrismRule, String> {
-        let annotations = self.get_current_annotations()?;
-        let user_inserted = {
-            let state = lock_or_err(&self.state)?;
-            state.user_rules_inserted
-        };
-        Ok(
-            match annotations.iter().find(|a| a.index_in_output == index) {
-                Some(a) => IsPrismRule {
+        let state = lock_or_err(&self.state)?;
+        let user_inserted = state.user_rules_inserted;
+        match state.annotation_index.get(&index) {
+            Some(&ann_idx) => {
+                let a = &state.last_annotations[ann_idx];
+                Ok(IsPrismRule {
                     is_prism: true,
                     group: Some(a.source_file.clone()),
                     label: Some(a.source_label.clone()),
                     immutable: a.immutable,
                     user_custom: false,
-                },
-                None => IsPrismRule {
-                    is_prism: false,
-                    group: None,
-                    label: None,
-                    immutable: false,
-                    user_custom: user_inserted,
-                },
-            },
-        )
+                })
+            }
+            None => Ok(IsPrismRule {
+                is_prism: false,
+                group: None,
+                label: None,
+                immutable: false,
+                user_custom: user_inserted,
+            }),
+        }
     }
 
     /// 在指定位置插入用户自定义规则
@@ -379,10 +402,14 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         // 设置 user_rules_inserted 标志，使 is_prism_rule() 能区分
         // "无注解数据（从未编译）" 和 "用户手动插入了自定义规则"。
         if let Ok(mut state) = lock_or_err(&self.state) {
-            state.last_output = output;
+            state.last_output = std::sync::Arc::new(output);
             state.last_patches.clear();
             state.last_traces.clear();
+            state.last_annotations.clear();
+            state.annotation_index.clear();
             state.user_rules_inserted = true;
+        } else {
+            tracing::error!("insert_rule: 无法获取 state 锁，内部状态可能不一致");
         }
         // Also clear watcher shared state to keep it consistent
         if let Ok(mut wr) = lock_or_err(&self.watcher_result) {
@@ -560,6 +587,7 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         let host = self.host.clone();
         let running = self.watcher_running.clone();
         let shared_result = self.watcher_result.clone();
+        let shared_cache = self.parse_cache.clone();
         running.store(true, std::sync::atomic::Ordering::SeqCst);
 
         let handle = std::thread::Builder::new()
@@ -614,6 +642,7 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
                                 let ext = PrismExtension::new_with_shared(
                                     host.clone(),
                                     shared_result.clone(),
+                                    shared_cache.clone(),
                                 );
                                 match ext.apply(ApplyOptions::default()) {
                                     Ok(_) => host.notify(PrismEvent::WatcherEvent {
@@ -804,13 +833,61 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
             return Ok((base_config, Vec::new(), Vec::new()));
         }
 
+        // 获取当前解析缓存快照
+        let cached_hashes: std::collections::HashMap<String, String> = {
+            let cache = lock_or_err(&self.parse_cache)?;
+            cache
+                .keys()
+                .map(|k| (k.clone(), cache[k].0.clone()))
+                .collect()
+        };
+
         let mut compiler = PatchCompiler::new();
+        let mut new_cache_entries: Vec<(String, (String, Vec<Patch>))> = Vec::new();
+
         for (file_name, content) in &prism_files {
+            // 计算文件内容 SHA-256 hash
+            let hash = {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(content.as_bytes());
+                hasher
+                    .finalize()
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect()
+            };
+
+            // 缓存命中：复用上次解析的 Patches
+            if let Some(cached_hash) = cached_hashes.get(file_name) {
+                if *cached_hash == hash {
+                    if let Ok(cache) = lock_or_err(&self.parse_cache) {
+                        if let Some((_, cached_patches)) = cache.get(file_name) {
+                            compiler
+                                .register_patches(file_name.clone(), cached_patches.clone())
+                                .map_err(|e| format!("Patch 注册错误 [{}]: {}", file_name, e))?;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // 缓存未命中：重新解析
             let patches = DslParser::parse_str(content, Some(std::path::PathBuf::from(file_name)))
                 .map_err(|e| format!("DSL 解析错误 [{}]: {}", file_name, e))?;
             compiler
-                .register_patches(file_name.clone(), patches)
+                .register_patches(file_name.clone(), patches.clone())
                 .map_err(|e| format!("Patch 注册错误 [{}]: {}", file_name, e))?;
+            new_cache_entries.push((file_name.clone(), (hash, patches)));
+        }
+
+        // 更新解析缓存
+        if !new_cache_entries.is_empty() {
+            if let Ok(mut cache) = lock_or_err(&self.parse_cache) {
+                for (name, entry) in new_cache_entries {
+                    cache.insert(name, entry);
+                }
+            }
         }
 
         let sorted_ids = compiler
@@ -822,9 +899,9 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         let patch_index: HashMap<&str, &Patch> =
             all_patches.iter().map(|p| (p.id.as_str(), *p)).collect();
 
-        let sorted_patches: Vec<Patch> = sorted_ids
+        let sorted_patches: Vec<&Patch> = sorted_ids
             .iter()
-            .filter_map(|id| patch_index.get(id.as_str()).map(|p| (*p).clone()))
+            .filter_map(|id| patch_index.get(id.as_str()).copied())
             .collect();
 
         let mut executor = PatchExecutor::new();
@@ -833,7 +910,9 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
             .map_err(|e| format!("Patch 执行错误: {}", e))?;
 
         let traces = std::mem::take(&mut executor.traces);
-        Ok((config, traces, sorted_patches))
+        // 收集 owned patches 用于返回（仅在缓存未命中时需要 clone）
+        let owned_patches: Vec<Patch> = sorted_patches.into_iter().cloned().collect();
+        Ok((config, traces, owned_patches))
     }
 
     fn scan_prism_files(
@@ -875,16 +954,21 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
     }
 
     fn get_current_annotations(&self) -> Result<Vec<RuleAnnotation>, String> {
-        // 优先从 watcher_result 读取（watcher 线程编译后的最新状态）
+        // 优先从 watcher_result 读取缓存（watcher_result 存在说明至少成功过一次）
         if let Ok(guard) = lock_or_err(&self.watcher_result)
             && let Some(ref wr) = *guard
+            && wr.compile_success
         {
-            return Ok(extract_rule_annotations(&wr.traces, &wr.output));
+            return Ok(wr.annotations.clone());
         }
         let state = lock_or_err(&self.state)?;
+        if state.last_compile_success {
+            return Ok(state.last_annotations.clone());
+        }
+        // 回退：从未成功编译过，重新计算
         Ok(extract_rule_annotations(
             &state.last_traces,
-            &state.last_output,
+            &*state.last_output,
         ))
     }
 
@@ -892,10 +976,10 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         if let Ok(guard) = lock_or_err(&self.watcher_result)
             && let Some(ref wr) = *guard
         {
-            return Ok(wr.output.clone());
+            return Ok((*wr.output).clone());
         }
         let state = lock_or_err(&self.state)?;
-        Ok(state.last_output.clone())
+        Ok((*state.last_output).clone())
     }
 
     fn build_trace_views(traces: &[clash_prism_core::trace::ExecutionTrace]) -> Vec<TraceView> {

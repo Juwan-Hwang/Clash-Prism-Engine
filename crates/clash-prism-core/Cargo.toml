@@ -1,7 +1,7 @@
 [package]
 name = "clash-prism-core"
 description = "Prism Engine core — Patch IR, compiler, executor, validator, cache, watcher"
-version.workspace = true
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

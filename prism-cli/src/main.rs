@@ -418,7 +418,7 @@ fn cmd_parse(file: PathBuf) -> Result<(), String> {
     if !patches.is_empty() {
         println!("\n🔧 尝试执行（基于空配置）...");
         let mut executor = clash_prism_core::executor::PatchExecutor::new();
-        match executor.execute(serde_json::json!({}), &patches) {
+        match executor.execute_owned(serde_json::json!({}), &patches) {
             Ok(cfg) => {
                 println!(
                     "\n📄 输出:\n{}",

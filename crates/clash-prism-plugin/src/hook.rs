@@ -19,6 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use chrono::TimeZone;
 use chrono::{Datelike, Timelike};
 
 /// 生命周期钩子枚举
@@ -729,17 +731,50 @@ mod tests {
 
     #[test]
     fn test_hook_from_str_builtin() {
+        // 所有 8 个内置钩子 × 3 种格式变体（PascalCase / camelCase / snake_case）
+        let cases: &[(&str, Hook)] = &[
+            ("OnSubscribeFetch", Hook::OnSubscribeFetch),
+            ("onSubscribeFetch", Hook::OnSubscribeFetch),
+            ("on_subscribe_fetch", Hook::OnSubscribeFetch),
+            ("OnSubscribeParsed", Hook::OnSubscribeParsed),
+            ("onSubscribeParsed", Hook::OnSubscribeParsed),
+            ("on_subscribe_parsed", Hook::OnSubscribeParsed),
+            ("OnMerged", Hook::OnMerged),
+            ("onMerged", Hook::OnMerged),
+            ("on_merged", Hook::OnMerged),
+            ("OnBeforeWrite", Hook::OnBeforeWrite),
+            ("onBeforeWrite", Hook::OnBeforeWrite),
+            ("on_before_write", Hook::OnBeforeWrite),
+            ("OnBeforeCoreStart", Hook::OnBeforeCoreStart),
+            ("onBeforeCoreStart", Hook::OnBeforeCoreStart),
+            ("on_before_core_start", Hook::OnBeforeCoreStart),
+            ("OnCoreStopped", Hook::OnCoreStopped),
+            ("onCoreStopped", Hook::OnCoreStopped),
+            ("on_core_stopped", Hook::OnCoreStopped),
+            ("OnAppReady", Hook::OnAppReady),
+            ("onAppReady", Hook::OnAppReady),
+            ("on_app_ready", Hook::OnAppReady),
+            ("OnShutdown", Hook::OnShutdown),
+            ("onShutdown", Hook::OnShutdown),
+            ("on_shutdown", Hook::OnShutdown),
+        ];
+
+        for (input, expected) in cases {
+            let parsed: Hook = input
+                .parse()
+                .unwrap_or_else(|e| panic!("Failed to parse hook name {:?}: {}", input, e));
+            assert_eq!(
+                parsed, *expected,
+                "Hook name {:?} should parse to {:?}",
+                input, expected
+            );
+        }
+
+        // 确保覆盖了所有 8 个内置钩子（24 = 8 × 3）
         assert_eq!(
-            "OnSubscribeFetch".parse::<Hook>().unwrap(),
-            Hook::OnSubscribeFetch
-        );
-        assert_eq!(
-            "onSubscribeParsed".parse::<Hook>().unwrap(),
-            Hook::OnSubscribeParsed
-        );
-        assert_eq!(
-            "on_before_write".parse::<Hook>().unwrap(),
-            Hook::OnBeforeWrite
+            cases.len(),
+            24,
+            "应覆盖所有 8 个内置钩子 × 3 种格式 = 24 个用例"
         );
     }
 
@@ -775,15 +810,18 @@ mod tests {
         assert_eq!(scheduler.len(), 1);
         assert!(!scheduler.is_empty());
 
-        // 查询到期任务（新注册的任务应该触发）
-        let now = chrono::Utc::now();
+        // 使用固定时间：2025-01-01 10:00:00 UTC（整点，应触发 "0 * * * *"）
+        let now = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 0, 0).unwrap();
         let due = scheduler.poll_due_hooks(now);
 
-        // */5 should trigger within any 5-minute window
-        // (test may fail at exact boundary, but is statistically sound)
-        if !due.is_empty() {
-            assert_eq!(due[0].0, "test-plugin");
-        }
+        assert!(!due.is_empty(), "整点时间应触发 '0 * * * *' 钩子");
+        assert_eq!(due[0].0, "test-plugin");
+        assert_eq!(due[0].1, "0 * * * *");
+
+        // 非整点时间不应触发
+        let non_due_time = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 30, 0).unwrap();
+        let due2 = scheduler.poll_due_hooks(non_due_time);
+        assert!(due2.is_empty(), "非整点时间不应触发 '0 * * * *' 钩子");
     }
 
     #[test]
@@ -835,16 +873,25 @@ mod tests {
 
     #[test]
     fn test_next_trigger_time() {
+        // 固定时间 2025-01-01 10:30:00 UTC，cron "0 * * * *" → 下次触发应为 11:00:00
         let hook = ScheduledHook::new("test".into(), "0 * * * *".into());
-        let now = chrono::Utc::now();
+        let now = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 30, 0).unwrap();
 
-        let next = hook.next_trigger_time(now);
-        assert!(next.is_some());
+        let next = hook.next_trigger_time(now).unwrap();
+        let expected = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 11, 0, 0).unwrap();
+        assert_eq!(next, expected);
 
-        // Next trigger should be within the next hour
-        let diff = next.unwrap().signed_duration_since(now);
-        assert!(diff.num_minutes() <= 60);
-        assert!(diff.num_minutes() > 0);
+        // cron "30 * * * *" 从 10:30:00 开始 → 下次触发应为 11:30:00
+        let hook2 = ScheduledHook::new("test".into(), "30 * * * *".into());
+        let next2 = hook2.next_trigger_time(now).unwrap();
+        let expected2 = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 11, 30, 0).unwrap();
+        assert_eq!(next2, expected2);
+
+        // cron "0 0 * * *" 从 10:30:00 开始 → 下次触发应为次日 00:00:00
+        let hook3 = ScheduledHook::new("test".into(), "0 0 * * *".into());
+        let next3 = hook3.next_trigger_time(now).unwrap();
+        let expected3 = chrono::Utc.with_ymd_and_hms(2025, 1, 2, 0, 0, 0).unwrap();
+        assert_eq!(next3, expected3);
     }
 
     #[test]
@@ -862,9 +909,29 @@ mod tests {
         scheduler.schedule("plugin-a", "0 * * * *").unwrap();
         scheduler.schedule("plugin-b", "30 * * * *").unwrap();
 
-        let now = chrono::Utc::now();
+        // 固定时间 2025-01-01 10:15:00 UTC
+        // "0 * * * *" 下次触发 → 11:00:00（距 now 45 分钟）
+        // "30 * * * *" 下次触发 → 10:30:00（距 now 15 分钟）
+        // 最小值应为 10:30:00
+        let now = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 15, 0).unwrap();
         let next = scheduler.get_next_due_time(now);
         assert!(next.is_some());
+
+        let next_time = next.unwrap();
+        let expected = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 30, 0).unwrap();
+        assert_eq!(
+            next_time, expected,
+            "最近的下次触发时间应为 10:30:00（plugin-b 的 '30 * * * *'）"
+        );
+
+        // 验证返回值在合理范围内：距 now 不超过 60 分钟且大于 0
+        let diff = next_time.signed_duration_since(now);
+        assert!(diff.num_minutes() > 0, "下次触发时间应在当前时间之后");
+        assert!(
+            diff.num_minutes() <= 60,
+            "下次触发时间不应超过 60 分钟，实际差 {} 分钟",
+            diff.num_minutes()
+        );
     }
 
     #[test]

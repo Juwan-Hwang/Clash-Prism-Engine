@@ -285,7 +285,7 @@ dns:
         b.iter(|| {
             let base_config = serde_json::json!({"proxies": large_proxies.clone()});
             let mut executor = PatchExecutor::new();
-            let _ = black_box(executor.execute(base_config, &patches));
+            let _ = black_box(executor.execute(base_config, &patches.iter().collect::<Vec<_>>()));
         });
     });
 

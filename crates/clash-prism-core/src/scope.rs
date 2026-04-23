@@ -474,6 +474,8 @@ mod tests {
         let display = format!("{}", scope);
         assert!(display.starts_with("Scoped("));
         assert!(display.contains("core=clash"));
+        assert!(display.contains("profile=home"));
+        assert!(display.contains("platform=[macos]"));
     }
 
     // ─── ScopedBuilder 完整链式调用 ───
@@ -797,10 +799,10 @@ mod tests {
         match scope {
             Scope::Scoped { platform, .. } => {
                 let platforms = platform.unwrap();
-                assert_eq!(platforms.len(), 3);
-                assert!(platforms.contains(&Platform::Windows));
-                assert!(platforms.contains(&Platform::Linux));
-                assert!(platforms.contains(&Platform::MacOS));
+                assert_eq!(
+                    platforms,
+                    &[Platform::Windows, Platform::Linux, Platform::MacOS]
+                );
             }
             _ => panic!("Expected Scoped variant"),
         }

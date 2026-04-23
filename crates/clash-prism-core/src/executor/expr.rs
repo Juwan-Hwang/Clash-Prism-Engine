@@ -1752,7 +1752,8 @@ fn eval_replace_call(
                 return Ok(Some(serde_json::Value::String(text.clone())));
             };
             // 去掉尾部的 )（如果有），因为 value 表达式可能包含闭合括号
-            let after_comma = after_comma.trim_end_matches(')');
+            // 仅移除单个尾部 )，避免过度裁剪（如 "foo()" 中的括号）
+            let after_comma = after_comma.strip_suffix(')').unwrap_or(after_comma);
             // 解析带引号的字符串
             let replacement_str = parse_json_literal(after_comma)?;
             let replacement = match replacement_str {

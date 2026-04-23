@@ -2370,17 +2370,25 @@ mod tests {
             .dfa_size_limit(1024) // 极小的 DFA 限制
             .build();
 
-        // 这个模式可能编译成功但 DFA 被限制，也可能直接失败
-        // 关键是验证 dfa_size_limit 参数被正确传递
-        if let Ok(re) = result {
-            // 如果编译成功，验证它能正常工作（不会 panic）
-            let config = serde_json::json!({
-                "proxies": [{"name": "test", "type": "ss"}]
-            });
-            let groups = group_proxies_by_regex(&config, &re);
-            // 不应 panic，结果可能为空
-            let _ = groups;
+        match result {
+            Ok(re) => {
+                // 编译成功但 DFA 被限制：验证正则能正常工作（不会 panic）
+                let config = serde_json::json!({
+                    "proxies": [{"name": "test", "type": "ss"}]
+                });
+                let groups = group_proxies_by_regex(&config, &re);
+                // 恶意模式不应匹配普通代理名，结果应为空
+                assert!(groups.is_empty(), "恶意正则模式不应匹配普通代理名称");
+            }
+            Err(e) => {
+                // 编译失败：DFA 大小限制生效，验证错误信息与 DFA 限制相关
+                let err_msg = e.to_string();
+                assert!(
+                    err_msg.contains("dfa") || err_msg.contains("DFA") || err_msg.contains("size"),
+                    "编译失败应与 DFA 大小限制相关，实际错误: {}",
+                    err_msg
+                );
+            }
         }
-        // 如果编译失败也是预期行为（DFA 限制生效）
     }
 }

@@ -4,7 +4,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org/)
 [![CI](https://github.com/Juwan-Hwang/Clash-Prism-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Juwan-Hwang/Clash-Prism-Engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-773%20passed-success.svg)]()
+[![Tests](https://img.shields.io/badge/tests-825%20passed-success.svg)]()
 
 > **Prism**: Multiple input sources refracted through a unified intermediate layer, producing precise, traceable final configurations.
 
@@ -43,7 +43,7 @@ If you're building a mihomo / Clash GUI client (e.g., a Tauri app), embed Prism 
 
 ```toml
 [dependencies]
-clash-prism-extension = "0.1.1"
+clash-prism-extension = "0.1.2"
 ```
 
 Implement the `PrismHost` trait (4 methods) to get full configuration management:
@@ -185,6 +185,7 @@ proxies:
 - **Smart Selector** — EMA scoring (P90 latency + success rate + stability), adaptive speed testing scheduler
 - **4-Layer Scope** — Global → Profile → Scoped → Runtime, Profile-level concurrent execution
 - **Security in Depth** — Path traversal protection, ReDoS protection, prototype pollution prevention, constant-time API key comparison, atomic file writes
+- **Large-Scale Rule Optimization** — Annotation caching, file-level parse caching, Arc sharing, HashMap indexing, retain in-place filtering, Patch reference passing; response drops from seconds to milliseconds with tens of thousands of rules
 
 ## Architecture
 

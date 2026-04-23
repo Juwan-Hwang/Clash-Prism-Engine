@@ -4,7 +4,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org/)
 [![CI](https://github.com/Juwan-Hwang/Clash-Prism-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Juwan-Hwang/Clash-Prism-Engine/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-773%20passed-success.svg)]()
+[![Tests](https://img.shields.io/badge/tests-825%20passed-success.svg)]()
 
 > **Prism**：多源输入经统一中间层折射，输出精确、可追溯的最终配置。
 
@@ -43,7 +43,7 @@ Prism Engine 有两种使用方式：
 
 ```toml
 [dependencies]
-clash-prism-extension = "0.1.1"
+clash-prism-extension = "0.1.2"
 ```
 
 实现 `PrismHost` trait（4 个方法），即可获得完整的配置管理能力：
@@ -185,6 +185,7 @@ proxies:
 - **Smart Selector** — EMA 评分（P90 延迟 + 成功率 + 稳定性），自适应测速调度
 - **4 层作用域** — Global → Profile → Scoped → Runtime，Profile 级并发执行
 - **安全纵深** — 路径遍历防护、ReDoS 防护、原型链污染防护、常量时间 API key 比较、原子文件写入
+- **大规模规则优化** — Annotation 缓存、文件级解析缓存、Arc 共享、HashMap 索引、retain 原地过滤、Patch 引用传递，几万条规则场景下响应从秒级降到毫秒级
 
 ## 架构
 

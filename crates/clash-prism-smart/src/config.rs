@@ -323,3 +323,127 @@ impl SmartConfig {
             .unwrap_or_else(|_| "# Error generating example TOML\n".to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// 辅助：构建一个合法的完整配置
+    fn valid_config() -> SmartConfig {
+        SmartConfig::default()
+    }
+
+    // -----------------------------------------------------------------------
+    // test_validate_valid_default_config
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_validate_valid_default_config() {
+        let config = valid_config();
+        assert!(config.validate().is_ok(), "默认配置应通过验证");
+    }
+
+    // -----------------------------------------------------------------------
+    // test_validate_rejects_invalid_score_type
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_validate_rejects_invalid_score_type() {
+        let mut config = valid_config();
+        config.score.r#type = "invalid".into();
+        let errs = config.validate().unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("'invalid' is not supported")),
+            "应报告 score.type 不合法，实际错误: {errs:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // test_validate_rejects_zero_base_interval
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_validate_rejects_zero_base_interval() {
+        let mut config = valid_config();
+        config.scheduler.base_interval_secs = 0;
+        let errs = config.validate().unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("base_interval_secs must be > 0")),
+            "应报告 base_interval_secs 为零，实际错误: {errs:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // test_validate_rejects_inverted_thresholds
+    // good >= bad 应报错（good 必须大于 bad）
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_validate_rejects_inverted_thresholds() {
+        let mut config = valid_config();
+        // 默认 good=0.9, bad=0.3 → 合法。反转后 good=0.3, bad=0.9 → good <= bad
+        config.scheduler.adaptive_params = Some(AdaptiveParams {
+            good_quality_threshold: 0.3,
+            bad_quality_threshold: 0.9,
+        });
+        let errs = config.validate().unwrap_err();
+        assert!(
+            errs.iter().any(|e| e
+                .contains("good_quality_threshold (0.3) must be > bad_quality_threshold (0.9)")),
+            "应报告阈值反转，实际错误: {errs:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // test_validate_rejects_weight_sum_not_one
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_validate_rejects_weight_sum_not_one() {
+        let mut config = valid_config();
+        config.score.weights.latency_p90 = 0.5;
+        config.score.weights.success_rate = 0.5;
+        config.score.weights.stability = 0.5; // sum = 1.5
+        let errs = config.validate().unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.contains("score.weights sum")),
+            "应报告权重和不等于 1.0，实际错误: {errs:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // test_validate_rejects_unbalanced_parens_filter
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_validate_rejects_unbalanced_parens_filter() {
+        let mut config = valid_config();
+        let mut groups: BTreeMap<String, ProxyGroupSmartConfig> = BTreeMap::new();
+        groups.insert(
+            "auto".to_string(),
+            ProxyGroupSmartConfig {
+                filter: Some("name.includes('香港'".to_string()), // 缺少右括号
+                url: default_test_url(),
+                interval: 300,
+                tolerance: 50,
+            },
+        );
+        config.proxy_groups = groups;
+        let errs = config.validate().unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.contains("括号不匹配")),
+            "应报告括号不匹配，实际错误: {errs:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // test_example_toml_is_valid
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_example_toml_is_valid() {
+        let toml_str = SmartConfig::example_toml();
+        let parsed = SmartConfig::from_toml(&toml_str).expect("example_toml() 输出应能被成功解析");
+        assert!(
+            parsed.validate().is_ok(),
+            "解析后的配置应通过验证，错误: {:?}",
+            parsed.validate().unwrap_err()
+        );
+    }
+}

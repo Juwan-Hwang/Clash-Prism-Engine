@@ -257,7 +257,7 @@ impl WatchCallback for DefaultPipeline {
         // - watcher 模式下编译频率受防抖窗口限制（默认 300ms），clone 不是瓶颈
         let final_config = self
             .executor
-            .execute(self.base_config.clone(), &patches)
+            .execute_owned(self.base_config.clone(), &patches)
             .map_err(|e| format!("Patch 执行失败: {}", e))?;
 
         // 4. 原子写入目标文件
@@ -326,7 +326,7 @@ impl WatchCallback for DefaultPipeline {
         // NOTE: 同 on_change，base_config.clone() 是有意的设计选择（execute 需要 owned Value）。
         let final_config = self
             .executor
-            .execute(self.base_config.clone(), &all_patches)
+            .execute_owned(self.base_config.clone(), &all_patches)
             .map_err(|e| format!("Patch 执行失败: {}", e))?;
 
         // 3. 原子写入目标文件

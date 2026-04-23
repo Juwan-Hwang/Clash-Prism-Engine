@@ -61,7 +61,7 @@ pub fn prism_schema() -> serde_json::Value {
             ),
             "$default" => (
                 "Default value injection (only when field is absent or null)",
-                json!({"type": ["object", "string", "number", "boolean", "array"]}),
+                json!({"type": ["object", "string", "number", "boolean", "array", "null"]}),
             ),
             _ => continue, // Skip unknown ops
         };
@@ -174,15 +174,14 @@ pub fn prism_schema() -> serde_json::Value {
             "tun": { "$ref": "#/definitions/config_field" },
             "rules": { "$ref": "#/definitions/array_field" },
             "proxies": { "$ref": "#/definitions/array_field" },
-            "proxy-groups": { "$ref": "#/definitions/array_field" },
-
-            // ─── Allow arbitrary top-level keys (users can define any config path) ───
-            "additionalProperties": {
-                "oneOf": [
-                    { "$ref": "#/definitions/config_field" },
-                    { "$ref": "#/definitions/array_field" }
-                ]
-            }
+            "proxy-groups": { "$ref": "#/definitions/array_field" }
+        },
+        // ─── Allow arbitrary top-level keys (users can define any config path) ───
+        "additionalProperties": {
+            "oneOf": [
+                { "$ref": "#/definitions/config_field" },
+                { "$ref": "#/definitions/array_field" }
+            ]
         },
         "definitions": {
             "config_field": {

@@ -164,7 +164,7 @@ pub struct ExecutionContext {
 /// ```ignore
 /// let mut executor = PatchExecutor::new();
 /// let config = json!({"dns": {}});
-/// let result = executor.execute(config, &patches)?;
+/// let result = executor.execute_owned(config, &patches)?;
 /// // result = modified config
 /// // executor.traces = vec of ExecutionTrace for each patch
 /// ```
@@ -241,7 +241,7 @@ impl PatchExecutor {
     pub fn execute(
         &mut self,
         mut config: serde_json::Value,
-        patches: &[Patch],
+        patches: &[&Patch],
     ) -> Result<serde_json::Value> {
         // to prevent stale traces from previous executions accumulating.
         self.traces.clear();
@@ -255,6 +255,17 @@ impl PatchExecutor {
             }
         }
         Ok(config)
+    }
+
+    /// 便捷方法：接受 `&[Patch]`（owned），内部转换为引用。
+    /// 用于向后兼容测试代码和 watcher 等调用方。
+    pub fn execute_owned(
+        &mut self,
+        config: serde_json::Value,
+        patches: &[Patch],
+    ) -> Result<serde_json::Value> {
+        let refs: Vec<&Patch> = patches.iter().collect();
+        self.execute(config, &refs)
     }
 
     /// 两阶段管线执行（§4.1 / §9）
@@ -276,8 +287,8 @@ impl PatchExecutor {
     pub fn execute_pipeline(
         &mut self,
         base_config: &serde_json::Value,
-        profile_groups: Vec<(String, Vec<Patch>)>,
-        shared_patches: Vec<Patch>,
+        profile_groups: Vec<(String, Vec<&Patch>)>,
+        shared_patches: Vec<&Patch>,
     ) -> Result<(Vec<ExecutionTrace>, serde_json::Value)> {
         self.traces.clear();
         let mut all_traces: Vec<ExecutionTrace> = Vec::new();
@@ -389,7 +400,11 @@ impl PatchExecutor {
         // existing __after__ dependency order within the same priority level.
         // The shared_patches are already sorted by dependency order from
         // compile_and_execute_pipeline, so the original index encodes that order.
-        let mut indexed_shared: Vec<(usize, &Patch)> = shared_patches.iter().enumerate().collect();
+        let mut indexed_shared: Vec<(usize, &Patch)> = shared_patches
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, *p))
+            .collect();
         indexed_shared.sort_by_key(|(idx, patch)| (patch.scope.priority(), *idx));
         let sorted_shared: Vec<&Patch> = indexed_shared.into_iter().map(|(_, p)| p).collect();
 
@@ -680,15 +695,18 @@ impl PatchExecutor {
         let items_to_prepend = new_items.len();
         let original_len = get_array_len(config, &patch.path);
 
+        let actually_prepend;
         if let Some(serde_json::Value::Array(existing)) = get_array_at_path_mut(config, &patch.path)
         {
             // Batch prepend: O(n+m) instead of O(n*m)
-            existing.splice(0..0, new_items.iter().rev().cloned());
+            existing.splice(0..0, new_items.iter().cloned());
+            actually_prepend = items_to_prepend;
         } else {
             tracing::debug!(
                 path = %patch.path,
                 "Prepend: target path does not exist or is not an array, skipping"
             );
+            actually_prepend = 0;
         }
 
         // Extract actual item text for annotation matching:
@@ -721,12 +739,12 @@ impl PatchExecutor {
             0,
             true,
             TraceSummary::new(
-                items_to_prepend,
+                actually_prepend,
                 0,
                 0,
                 original_len,
                 original_len,
-                original_len + items_to_prepend,
+                original_len + actually_prepend,
             ),
             affected,
         );
@@ -748,6 +766,7 @@ impl PatchExecutor {
             _ => 1,
         };
 
+        let actually_append;
         if let Some(serde_json::Value::Array(existing)) = get_array_at_path_mut(config, &patch.path)
         {
             if let serde_json::Value::Array(new_items) = &patch.value {
@@ -755,6 +774,9 @@ impl PatchExecutor {
             } else {
                 existing.push(patch.value.clone());
             }
+            actually_append = items_to_append;
+        } else {
+            actually_append = 0;
         }
 
         // Extract actual item text for annotation matching (same strategy as prepend)
@@ -788,12 +810,12 @@ impl PatchExecutor {
             0,
             true,
             TraceSummary::new(
-                items_to_append,
+                actually_append,
                 0,
                 0,
                 original_len,
                 original_len,
-                original_len + items_to_append,
+                original_len + actually_append,
             ),
             affected,
         );
@@ -817,40 +839,46 @@ impl PatchExecutor {
         let mut removed_count = 0;
 
         if let Some(serde_json::Value::Array(items)) = get_array_at_path_mut(config, &patch.path) {
-            let original_items: Vec<(usize, serde_json::Value)> =
-                items.iter().cloned().enumerate().collect();
+            // 第一遍：评估每个元素，记录被过滤掉的元素（用于 trace 的 affected_items）
+            // 只克隆被移除的元素，避免全量克隆
+            let eval_results: Vec<(usize, bool, bool)> = items
+                .iter()
+                .enumerate()
+                .map(|(idx, item)| {
+                    match evaluate_predicate(filter_expr, item) {
+                        Ok(true) => (idx, true, false),   // 保留
+                        Ok(false) => (idx, false, false), // 移除
+                        Err(_) => (idx, true, true),      // 错误，保留
+                    }
+                })
+                .collect();
 
-            // 过滤：保留满足条件的元素
-            // Note: AffectedItem 中的索引为原始数组位置，用于与源配置关联。
-            let mut filtered = Vec::new();
-            for (idx, item) in original_items.into_iter() {
-                match evaluate_predicate(filter_expr, &item) {
-                    Ok(true) => {
-                        kept_count += 1;
-                        filtered.push(item);
-                    }
-                    Ok(false) => {
-                        removed_count += 1;
-                        let name = item
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?")
-                            .to_string();
-                        affected.push(AffectedItem::removed(idx, name));
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Filter expression error on element #{}: {}, keeping element",
-                            idx,
-                            e
-                        );
-                        kept_count += 1;
-                        filtered.push(item);
-                    }
+            for (idx, keep, is_err) in &eval_results {
+                if *is_err {
+                    tracing::warn!(
+                        "Filter expression error on element #{}: keeping element",
+                        idx
+                    );
+                }
+                if !keep && !is_err {
+                    removed_count += 1;
+                    // 只克隆被移除的元素用于 trace
+                    let item = &items[*idx];
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    affected.push(AffectedItem::removed(*idx, name));
+                }
+                if *keep {
+                    kept_count += 1;
                 }
             }
 
-            *items = filtered;
+            // 第二遍：使用 retain 原地过滤（避免构建新 Vec）
+            let mut eval_iter = eval_results.into_iter();
+            items.retain(|_| eval_iter.next().map_or(true, |(_, keep, _)| keep));
         }
 
         let total_after = kept_count;
@@ -1015,41 +1043,46 @@ impl PatchExecutor {
         let mut kept_count = 0;
 
         if let Some(serde_json::Value::Array(items)) = get_array_at_path_mut(config, &patch.path) {
-            // 仅需一次 clone 用于安全地遍历原始数据。
-            let original: Vec<serde_json::Value> = items.clone();
+            // 第一遍：评估每个元素，记录被移除的元素（用于 trace 的 affected_items）
+            // 只克隆被移除的元素，避免全量克隆
+            let eval_results: Vec<(usize, bool, bool)> = items
+                .iter()
+                .enumerate()
+                .map(|(idx, item)| {
+                    match evaluate_predicate(remove_expr, item) {
+                        Ok(true) => (idx, false, false), // 移除
+                        Ok(false) => (idx, true, false), // 保留
+                        Err(_) => (idx, true, true),     // 错误，保留
+                    }
+                })
+                .collect();
 
-            // 删除：移除满足条件的元素（构建保留列表）
-            // Note: AffectedItem 中的索引为原始数组位置，用于与源配置关联。
-            let mut remaining = Vec::with_capacity(original.len());
-            for (idx, item) in original.iter().enumerate() {
-                match evaluate_predicate(remove_expr, item) {
-                    Ok(true) => {
-                        removed_count += 1;
-                        let name = item
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?")
-                            .to_string();
-                        affected.push(AffectedItem::removed(idx, name));
-                        // 不加入 remaining → 等效于删除
-                    }
-                    Ok(false) => {
-                        kept_count += 1;
-                        remaining.push(item.clone());
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Remove expression error on element #{}: {}, keeping element",
-                            idx,
-                            e
-                        );
-                        kept_count += 1;
-                        remaining.push(item.clone());
-                    }
+            for (idx, keep, is_err) in &eval_results {
+                if *is_err {
+                    tracing::warn!(
+                        "Remove expression error on element #{}: keeping element",
+                        idx
+                    );
+                }
+                if !keep && !is_err {
+                    removed_count += 1;
+                    // 只克隆被移除的元素用于 trace
+                    let item = &items[*idx];
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    affected.push(AffectedItem::removed(*idx, name));
+                }
+                if *keep {
+                    kept_count += 1;
                 }
             }
 
-            *items = remaining;
+            // 第二遍：使用 retain 原地过滤（避免构建新 Vec）
+            let mut eval_iter = eval_results.into_iter();
+            items.retain(|_| eval_iter.next().map_or(true, |(_, keep, _)| keep));
 
             let total_after = kept_count;
             let trace = ExecutionTrace::new(
@@ -1289,7 +1322,7 @@ pub fn apply_prepend(config: &mut serde_json::Value, path: &str, value: &serde_j
             Some(arr) => arr,
             None => std::slice::from_ref(value),
         };
-        existing.splice(0..0, new_items.iter().rev().cloned());
+        existing.splice(0..0, new_items.iter().cloned());
     }
 }
 
@@ -1419,7 +1452,7 @@ fn execute_profile_patches(
     base_clone: &Arc<serde_json::Value>,
     ctx_clone: &Arc<ExecutionContext>,
     profile_name: &str,
-    patches: &[Patch],
+    patches: &[&Patch],
 ) -> std::result::Result<(String, serde_json::Value, Vec<ExecutionTrace>), crate::error::PrismError>
 {
     let mut profile_executor = PatchExecutor::with_context((**ctx_clone).clone());
@@ -1514,6 +1547,10 @@ pub fn check_patch_condition(patch: &Patch, context: &ExecutionContext) -> bool 
             {
                 return PatchExecutor::profile_matches(ctx_profile, scope_profile);
             }
+            // scope 声明了 profile 条件但 context 未指定 profile → 不执行
+            if profile.is_some() && context.profile_name.is_none() {
+                return false;
+            }
             true
         }
         crate::scope::Scope::Runtime => true,
@@ -1553,7 +1590,7 @@ mod tests {
         let config = serde_json::json!({});
         let patch = make_set_default_patch("dns", serde_json::json!({"enable": true}));
 
-        let result = executor.execute(config.clone(), &[patch]).unwrap();
+        let result = executor.execute_owned(config.clone(), &[patch]).unwrap();
         assert!(executor.traces.last().unwrap().condition_matched);
         assert_eq!(result["dns"]["enable"], true);
     }
@@ -1565,7 +1602,7 @@ mod tests {
         let config = serde_json::json!({"dns": null});
         let patch = make_set_default_patch("dns", serde_json::json!({"enable": true}));
 
-        let result = executor.execute(config.clone(), &[patch]).unwrap();
+        let result = executor.execute_owned(config.clone(), &[patch]).unwrap();
         assert!(executor.traces.last().unwrap().condition_matched);
         assert_eq!(result["dns"]["enable"], true);
     }
@@ -1577,7 +1614,7 @@ mod tests {
         let config = serde_json::json!({"rules": []});
         let patch = make_set_default_patch("rules", serde_json::json!(["MATCH,DIRECT"]));
 
-        let _result = executor.execute(config.clone(), &[patch]).unwrap();
+        let _result = executor.execute_owned(config.clone(), &[patch]).unwrap();
         // 空数组是有效值，不应触发注入（modified=0, added=0 表示未触发）
         assert_eq!(executor.traces.last().unwrap().summary.modified, 0);
         assert_eq!(executor.traces.last().unwrap().summary.added, 0);
@@ -1593,7 +1630,7 @@ mod tests {
             serde_json::json!({"enable": true, "enhanced-mode": "fake-ip"}),
         );
 
-        let _result = executor.execute(config.clone(), &[patch]).unwrap();
+        let _result = executor.execute_owned(config.clone(), &[patch]).unwrap();
         // 空字典是有效值，不应触发注入（modified=0, added=0 表示未触发）
         assert_eq!(executor.traces.last().unwrap().summary.modified, 0);
         assert_eq!(executor.traces.last().unwrap().summary.added, 0);
@@ -1609,7 +1646,7 @@ mod tests {
             serde_json::json!({"enable": true, "enhanced-mode": "fake-ip"}),
         );
 
-        let result = executor.execute(config.clone(), &[patch]).unwrap();
+        let result = executor.execute_owned(config.clone(), &[patch]).unwrap();
         // 原有值应保留
         assert_eq!(result["dns"]["enable"], false);
         assert_eq!(result["dns"]["enhanced-mode"], "redir-host");
@@ -1913,6 +1950,8 @@ mod tests {
         let cloned = ctx.clone();
         assert_eq!(cloned.core_type, ctx.core_type);
         assert_eq!(cloned.profile_name, ctx.profile_name);
+        assert_eq!(cloned.platform, ctx.platform);
+        assert_eq!(cloned.ssid, ctx.ssid);
     }
 
     // ══════════════════════════════════════════════════════════
@@ -1970,7 +2009,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({});
         let patch = make_deep_merge_patch("dns", serde_json::json!({"enable": true}));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["dns"]["enable"], true);
     }
 
@@ -1979,7 +2018,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"dns": {"port": 53}});
         let patch = make_deep_merge_patch("dns", serde_json::json!({"enable": true}));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["dns"]["port"], 53);
         assert_eq!(result["dns"]["enable"], true);
     }
@@ -2008,7 +2047,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"rules": ["MATCH,DIRECT"]});
         let patch = make_append_patch("rules", serde_json::json!(["DOMAIN,example.com,DIRECT"]));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["rules"].as_array().unwrap().len(), 2);
         assert_eq!(result["rules"][1], "DOMAIN,example.com,DIRECT");
     }
@@ -2018,9 +2057,13 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({});
         let patch = make_append_patch("rules", serde_json::json!(["RULE"]));
-        let result = executor.execute(config, &[patch]).unwrap();
-        // Path doesn't exist → append is a no-op
+        let result = executor.execute_owned(config, &[patch]).unwrap();
+        // Path doesn't exist → append is a no-op (result 中无 rules 字段)
         assert!(result.get("rules").is_none());
+        assert_eq!(
+            executor.traces[0].summary.added, 0,
+            "路径不存在时 added 应为 0"
+        );
     }
 
     // ══════════════════════════════════════════════════════════
@@ -2047,7 +2090,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"rules": ["MATCH,DIRECT"]});
         let patch = make_prepend_patch("rules", serde_json::json!(["DOMAIN,example.com,DIRECT"]));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["rules"].as_array().unwrap().len(), 2);
         assert_eq!(result["rules"][0], "DOMAIN,example.com,DIRECT");
         assert_eq!(result["rules"][1], "MATCH,DIRECT");
@@ -2077,7 +2120,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"dns": {"enable": false, "port": 53}});
         let patch = make_override_patch("dns", serde_json::json!({"enable": true}));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["dns"]["enable"], true);
         // port should be gone since Override replaces the entire value
         assert!(result["dns"].get("port").is_none());
@@ -2092,7 +2135,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({});
         let patch = make_deep_merge_patch("dns", serde_json::json!({"enable": true}));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["dns"]["enable"], true);
         assert!(executor.traces[0].condition_matched);
     }
@@ -2121,7 +2164,7 @@ mod tests {
             PatchOp::DeepMerge,
             serde_json::json!({"enable": true}),
         );
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         // Patch should be skipped
         assert!(result.get("dns").is_none());
         assert!(!executor.traces[0].condition_matched);
@@ -2139,7 +2182,7 @@ mod tests {
             make_deep_merge_patch("dns", serde_json::json!({"enable": true})),
             make_deep_merge_patch("dns", serde_json::json!({"enhanced-mode": "fake-ip"})),
         ];
-        let result = executor.execute(config, &patches).unwrap();
+        let result = executor.execute_owned(config, &patches).unwrap();
         assert_eq!(result["dns"]["port"], 53);
         assert_eq!(result["dns"]["enable"], true);
         assert_eq!(result["dns"]["enhanced-mode"], "fake-ip");
@@ -2152,12 +2195,12 @@ mod tests {
         let config = serde_json::json!({});
         let patch = make_deep_merge_patch("a", serde_json::json!(1));
         executor
-            .execute(config.clone(), std::slice::from_ref(&patch))
+            .execute_owned(config.clone(), std::slice::from_ref(&patch))
             .unwrap();
         assert_eq!(executor.traces.len(), 1);
 
         // Second execution should clear previous traces
-        executor.execute(config.clone(), &[patch]).unwrap();
+        executor.execute_owned(config.clone(), &[patch]).unwrap();
         assert_eq!(executor.traces.len(), 1);
     }
 
@@ -2247,7 +2290,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"dns": {"enable": true}, "rules": ["MATCH,DIRECT"]});
         let original = config.clone();
-        let result = executor.execute(config, &[]).unwrap();
+        let result = executor.execute_owned(config, &[]).unwrap();
         assert_eq!(result, original, "空 patches 列表不应修改配置");
         assert!(executor.traces.is_empty(), "空 patches 应产生 0 条 trace");
     }
@@ -2264,7 +2307,7 @@ mod tests {
         });
         let patch =
             make_deep_merge_patch("dns.nameserver", serde_json::json!(["8.8.8.8", "1.1.1.1"]));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["dns"]["enable"], true, "原有字段应保留");
         assert_eq!(result["dns"]["port"], 53, "原有字段应保留");
         assert_eq!(result["dns"]["nameserver"].as_array().unwrap().len(), 2);
@@ -2278,7 +2321,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"dns": {"enable": true}});
         let patch = make_override_patch("tun.stack", serde_json::json!("mixed"));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["tun"]["stack"], "mixed", "不存在的嵌套路径应被创建");
         assert_eq!(result["dns"]["enable"], true, "无关字段不受影响");
     }
@@ -2295,7 +2338,7 @@ mod tests {
             ]
         });
         let patch = make_filter_patch("proxies", "p.type == 'ss'");
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(
             result["proxies"].as_array().unwrap().len(),
             3,
@@ -2317,7 +2360,7 @@ mod tests {
             ]
         });
         let patch = make_filter_patch("proxies", "p.type == 'trojan'");
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(
             result["proxies"].as_array().unwrap().len(),
             0,
@@ -2333,10 +2376,11 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"proxies": []});
         let patch = make_filter_patch("proxies", "p.type == 'ss'");
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["proxies"].as_array().unwrap().len(), 0);
         let trace = &executor.traces[0];
         assert!(trace.condition_matched);
+        assert_eq!(trace.summary.removed, 0, "空数组 filter 不应有删除");
     }
 
     /// 7. 对空数组执行 transform，验证无 panic
@@ -2345,10 +2389,11 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"proxies": []});
         let patch = make_transform_patch("proxies", "{...p, tagged: true}");
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["proxies"].as_array().unwrap().len(), 0);
         let trace = &executor.traces[0];
         assert!(trace.condition_matched);
+        assert_eq!(trace.summary.modified, 0, "空数组 transform 不应有修改");
     }
 
     /// 8. 对不存在的数组执行 prepend，验证跳过
@@ -2357,8 +2402,12 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({});
         let patch = make_prepend_patch("rules", serde_json::json!(["RULE-A"]));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert!(result.get("rules").is_none(), "不存在的路径不应被创建");
+        assert_eq!(
+            executor.traces[0].summary.added, 0,
+            "路径不存在时 added 应为 0"
+        );
     }
 
     /// 9. 对不存在的数组执行 append，验证跳过
@@ -2367,7 +2416,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({});
         let patch = make_append_patch("rules", serde_json::json!(["RULE-A"]));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert!(result.get("rules").is_none(), "不存在的路径不应被创建");
     }
 
@@ -2377,7 +2426,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"external-controller": "127.0.0.1:9090"});
         let patch = make_prepend_patch("external-controller", serde_json::json!(["0.0.0.0:9090"]));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         // Guarded field — prepend should be skipped (not an array, so no-op anyway)
         assert_eq!(
             result["external-controller"], "127.0.0.1:9090",
@@ -2396,7 +2445,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"secret": "my-secret"});
         let patch = make_filter_patch("secret", "true");
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["secret"], "my-secret", "guarded field 不应被修改");
         let trace = &executor.traces[0];
         assert_eq!(trace.summary.removed, 0, "不应删除任何元素");
@@ -2408,7 +2457,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"mode": null});
         let patch = make_set_default_patch("mode", serde_json::json!("rule"));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["mode"], "rule", "null 值应触发 default 注入");
         let trace = &executor.traces[0];
         assert_eq!(trace.summary.modified, 1, "应记录 1 次修改");
@@ -2421,7 +2470,7 @@ mod tests {
         let config = serde_json::json!({"proxies": []});
         let patch =
             make_set_default_patch("proxies", serde_json::json!([{"name": "default-proxy"}]));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(
             result["proxies"].as_array().unwrap().len(),
             0,
@@ -2437,7 +2486,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"dns": {}});
         let patch = make_set_default_patch("dns", serde_json::json!({"enable": true}));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(
             result["dns"].as_object().unwrap().len(),
             0,
@@ -2453,7 +2502,7 @@ mod tests {
         let mut executor = PatchExecutor::new();
         let config = serde_json::json!({"log-level": "warning"});
         let patch = make_set_default_patch("log-level", serde_json::json!("info"));
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(result["log-level"], "warning", "已有值不应被覆盖");
         let trace = &executor.traces[0];
         assert_eq!(trace.summary.modified, 0);
@@ -2471,7 +2520,7 @@ mod tests {
             ]
         });
         let patch = make_remove_patch("proxies", "p.type == 'ss'");
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(
             result["proxies"].as_array().unwrap().len(),
             0,
@@ -2506,7 +2555,7 @@ mod tests {
             },
         ];
         let patch = make_composite_patch("proxies", sub_ops);
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         let proxies = result["proxies"].as_array().unwrap();
         // filter 保留 2 个 ss 节点 + prepend 添加 1 个 = 3
         assert_eq!(proxies.len(), 3, "filter 保留 2 个 + prepend 添加 1 个 = 3");
@@ -2551,7 +2600,7 @@ mod tests {
             },
         ];
         let patch = make_composite_patch("proxies", sub_ops);
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         let proxies = result["proxies"].as_array().unwrap();
         // filter: 保留 3 个 ss → remove: 移除 jp-old → 剩 2 个 → transform
         assert_eq!(proxies.len(), 2);
@@ -2579,7 +2628,7 @@ mod tests {
             PatchOp::DeepMerge,
             serde_json::json!({"enable": true}),
         );
-        let result = executor.execute(config, &[patch]).unwrap();
+        let result = executor.execute_owned(config, &[patch]).unwrap();
         assert_eq!(
             result["dns"]["enable"], false,
             "条件不匹配时 patch 应被跳过"
@@ -2604,7 +2653,7 @@ mod tests {
             make_filter_patch("proxies", "p.type == 'ss'"),
             make_deep_merge_patch("dns", serde_json::json!({"enable": true})),
         ];
-        let result = executor.execute(config, &patches).unwrap();
+        let result = executor.execute_owned(config, &patches).unwrap();
 
         // 3 个 patch → 3 条 trace
         assert_eq!(executor.traces.len(), 3, "应有 3 条 trace");
@@ -2622,5 +2671,105 @@ mod tests {
         // Trace 2: DeepMerge — 新增 1 个键
         assert_eq!(executor.traces[2].summary.modified, 1);
         assert_eq!(result["dns"]["enable"], true);
+    }
+
+    /// test_filter_affected_items_content -- 验证 $filter 的 affected_items 记录了正确的被移除元素
+    ///
+    /// retain 模式下，被移除元素的 before 字段应包含原始值。
+    #[test]
+    fn test_filter_affected_items_content() {
+        let mut executor = PatchExecutor::new();
+        let config = serde_json::json!({
+            "proxies": [
+                {"name": "a", "type": "ss", "server": "1.1.1.1"},
+                {"name": "b", "type": "vmess", "server": "2.2.2.2"},
+                {"name": "c", "type": "ss", "server": "3.3.3.3"},
+                {"name": "d", "type": "trojan", "server": "4.4.4.4"},
+            ]
+        });
+        let patch = make_filter_patch("proxies", "type == 'ss'");
+        let result = executor.execute_owned(config, &[patch]).unwrap();
+
+        // 应保留 2 个 ss 节点，移除 2 个
+        let proxies = result["proxies"].as_array().unwrap();
+        assert_eq!(proxies.len(), 2);
+
+        // trace 应记录 2 个 removed items
+        let trace = &executor.traces[0];
+        assert_eq!(trace.summary.removed, 2);
+        assert_eq!(trace.affected_items.len(), 2);
+
+        // 验证被移除元素的 before 内容（before 存储元素的 name 字段值）
+        let removed_names: Vec<&str> = trace
+            .affected_items
+            .iter()
+            .filter_map(|item| item.before.as_deref())
+            .collect();
+        assert_eq!(
+            removed_names,
+            vec!["b", "d"],
+            "affected_items 应精确记录被移除节点的 name"
+        );
+    }
+
+    /// test_remove_affected_items_content -- 验证 $remove 的 affected_items 记录了正确的被移除元素
+    #[test]
+    fn test_remove_affected_items_content() {
+        let mut executor = PatchExecutor::new();
+        let config = serde_json::json!({
+            "proxies": [
+                {"name": "alpha", "type": "ss", "server": "1.1.1.1"},
+                {"name": "beta", "type": "vmess", "server": "2.2.2.2"},
+                {"name": "gamma", "type": "trojan", "server": "3.3.3.3"},
+                {"name": "delta", "type": "ss", "server": "4.4.4.4"},
+            ]
+        });
+        let patch = make_remove_patch("proxies", "p.type == 'ss'");
+        let result = executor.execute_owned(config, &[patch]).unwrap();
+
+        let proxies = result["proxies"].as_array().unwrap();
+        assert_eq!(proxies.len(), 2, "应移除 2 个 ss 节点，保留 2 个");
+
+        let trace = &executor.traces[0];
+        assert_eq!(trace.summary.removed, 2);
+        assert_eq!(trace.affected_items.len(), 2);
+
+        // 验证被移除节点的 name 精确匹配
+        let removed_names: Vec<&str> = trace
+            .affected_items
+            .iter()
+            .filter_map(|item| item.before.as_deref())
+            .collect();
+        assert_eq!(
+            removed_names,
+            vec!["alpha", "delta"],
+            "affected_items 应精确记录被移除节点的 name"
+        );
+    }
+
+    /// test_remove_partial_match -- $remove 部分匹配场景
+    #[test]
+    fn test_remove_partial_match() {
+        let mut executor = PatchExecutor::new();
+        let config = serde_json::json!({
+            "proxies": [
+                {"name": "keep-a", "type": "ss"},
+                {"name": "remove-b", "type": "vmess"},
+                {"name": "keep-c", "type": "trojan"},
+            ]
+        });
+        let patch = make_remove_patch("proxies", "p.type == 'vmess'");
+        let result = executor.execute_owned(config, &[patch]).unwrap();
+
+        let proxies = result["proxies"].as_array().unwrap();
+        assert_eq!(proxies.len(), 2, "应移除 1 条，保留 2 条");
+
+        let trace = &executor.traces[0];
+        assert_eq!(trace.summary.removed, 1);
+        assert_eq!(trace.affected_items.len(), 1);
+
+        // 验证被移除的是 remove-b（before 存储元素描述，非完整 JSON）
+        let removed = &trace.affected_items[0];
+        assert_eq!(removed.before.as_deref(), Some("remove-b"));
     }
 }

@@ -429,27 +429,24 @@ pub fn compile_and_execute_pipeline(
 ) -> crate::error::Result<Vec<crate::trace::ExecutionTrace>> {
     let all_patches: Vec<&Patch> = compiler.get_all_patches();
 
-    // 按 scope 分类
-    let mut profile_groups: std::collections::HashMap<String, Vec<Patch>> =
+    // 按 scope 分类（使用引用避免克隆）
+    let mut profile_groups: std::collections::HashMap<String, Vec<&Patch>> =
         std::collections::HashMap::new();
-    let mut shared_patches: Vec<Patch> = Vec::new();
+    let mut shared_patches: Vec<&Patch> = Vec::new();
 
     for patch in all_patches {
         match &patch.scope {
             Scope::Profile(name) => {
-                profile_groups
-                    .entry(name.clone())
-                    .or_default()
-                    .push(patch.clone());
+                profile_groups.entry(name.clone()).or_default().push(patch);
             }
             _ => {
-                shared_patches.push(patch.clone());
+                shared_patches.push(patch);
             }
         }
     }
 
-    // 转为 Vec<(String, Vec<Patch>)>，按 profile name 排序确保确定性
-    let mut profile_groups: Vec<(String, Vec<Patch>)> = profile_groups.into_iter().collect();
+    // 转为 Vec<(String, Vec<&Patch>)>，按 profile name 排序确保确定性
+    let mut profile_groups: Vec<(String, Vec<&Patch>)> = profile_groups.into_iter().collect();
     profile_groups.sort_by(|a, b| a.0.cmp(&b.0));
 
     // Topological sort by __after__ dependencies for deterministic execution order.
@@ -478,14 +475,14 @@ pub fn compile_and_execute_pipeline(
         let mut patch_group: HashMap<String, &str> = HashMap::new();
         for (group_name, patches) in &profile_groups {
             for p in patches {
-                patch_group.insert(p.id.to_string(), group_name.as_str());
+                patch_group.insert((*p).id.to_string(), group_name.as_str());
             }
         }
 
         // Check each profile patch's dependencies
         for (group_name, patches) in &profile_groups {
             for p in patches {
-                for dep in &p.after {
+                for dep in &(*p).after {
                     let dep_target = match dep {
                         DependencyRef::PatchId(id) => id.as_str(),
                         DependencyRef::FileName(name) => {
@@ -550,7 +547,7 @@ pub fn compile_and_execute_pipeline(
     {
         // 构建 shared patch 的 ID 集合，用于快速查找
         let shared_patch_ids: std::collections::HashSet<&str> =
-            shared_patches.iter().map(|p| p.id.as_str()).collect();
+            shared_patches.iter().map(|p| (*p).id.as_str()).collect();
 
         for (group_name, patches) in &profile_groups {
             for p in patches {
@@ -978,6 +975,12 @@ mod tests {
 
         let result = compiler.resolve_dependencies();
         assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("循环依赖"),
+            "三节点环应报告循环依赖: {}",
+            err_msg
+        );
     }
 
     // ─── 自依赖检测 ───
@@ -1166,8 +1169,21 @@ mod tests {
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
-            crate::scope::Scope::Scoped { core, .. } => {
+            crate::scope::Scope::Scoped {
+                core,
+                profile,
+                platform,
+                time_range,
+                enabled,
+                ssid,
+                ..
+            } => {
                 assert_eq!(core.as_deref(), Some("mihomo"));
+                assert!(profile.is_none(), "core-only when 不应有 profile");
+                assert!(platform.is_none(), "core-only when 不应有 platform");
+                assert!(time_range.is_none(), "core-only when 不应有 time_range");
+                assert_eq!(enabled, None, "core-only when 不应有 enabled");
+                assert!(ssid.is_none(), "core-only when 不应有 ssid");
             }
             _ => panic!("Expected Scoped scope"),
         }
@@ -1215,9 +1231,7 @@ mod tests {
         match scope {
             crate::scope::Scope::Scoped { platform, .. } => {
                 let plats = platform.unwrap();
-                assert_eq!(plats.len(), 2);
-                assert!(plats.contains(&Platform::Windows));
-                assert!(plats.contains(&Platform::Linux));
+                assert_eq!(plats, &[Platform::Windows, Platform::Linux]);
             }
             _ => panic!("Expected Scoped scope"),
         }

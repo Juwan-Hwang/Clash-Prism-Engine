@@ -28,7 +28,7 @@
 //!
 //! ## Design Principles
 //!
-//! 1. **One engine**: rquickjs, zero C dependency
+//! 1. **One engine**: Pure Rust expression evaluator (no JS runtime needed for predicates/transforms)
 //! 2. **One IR**: All inputs compile to unified Patch IR
 //! 3. **Strict static/runtime isolation**: Runtime fields (`delay`, `latency`, etc.) are rejected at compile time in `$filter`/`$transform`
 //! 4. **In-place mutation**: `config` is mutated directly instead of cloned per-operation

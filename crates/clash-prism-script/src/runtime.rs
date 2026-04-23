@@ -220,8 +220,23 @@ impl ScriptRuntime {
             return self.error_result(start, format!("脚本安全验证失败: {}", e));
         }
 
+        // 配置大小检查（防内存炸弹）
+        let config_str = config.to_string();
+        if config_str.len() > self.limits.max_config_bytes {
+            return self.error_result(
+                start,
+                format!(
+                    "配置大小 ({} 字节) 超过限制 ({} 字节)",
+                    config_str.len(),
+                    self.limits.max_config_bytes
+                ),
+            );
+        }
+
         // 沙箱感知安全检查：根据沙箱配置动态检测危险模式
-        let cleaned_for_sandbox = strip_code_strings_and_comments(script);
+        // 使用经过 Unicode 预处理后的脚本，与 validate() 保持一致的预处理管线
+        let preprocessed = preprocess_unicode_escapes(script);
+        let cleaned_for_sandbox = strip_code_strings_and_comments(&preprocessed);
         if !self.sandbox.allow_network {
             let network_patterns = [
                 ("fetch(", "网络访问被沙箱禁止: fetch"),
@@ -428,7 +443,7 @@ impl ScriptRuntime {
                         'eval','Function','require','process','module','exports',
                         '__dirname','__filename','global','Buffer',
                         'child_process','fs','net','http','https','dlopen',
-                        'WebAssembly','Proxy','Symbol'
+                        'WebAssembly','Proxy','Symbol','Reflect'
                     ];
                     for (var k = 0; k < _dangerous.length; k++) {
                         try {
@@ -789,7 +804,7 @@ impl ScriptRuntime {
         // Check original script (strings inside brackets are meaningful here)
         static BRACKET_ACCESS: OnceLock<regex::Regex> = OnceLock::new();
         let bracket_access = BRACKET_ACCESS.get_or_init(|| {
-            regex::Regex::new(r#"\[(?:"|')(?:eval|Function|process|require|import|__proto__|spawn|exec|child_process|fs|dlopen|WebAssembly)(?:"|')\]"#).expect("BRACKET_ACCESS regex compilation must succeed")
+            regex::Regex::new(r#"\[(?:"|')(?:eval|Function|process|require|import|__proto__|spawn|exec|child_process|fs|dlopen|WebAssembly|Reflect)(?:"|')\]"#).expect("BRACKET_ACCESS regex compilation must succeed")
         });
         if bracket_access.is_match(script) {
             return Err("检测到方括号属性访问尝试调用危险函数（如 this['eval']）".into());

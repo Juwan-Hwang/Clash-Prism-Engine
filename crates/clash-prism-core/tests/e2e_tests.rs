@@ -42,7 +42,7 @@ fn test_full_pipeline_deep_merge_and_override() {
 
     let mut executor = PatchExecutor::new();
     let base_config = serde_json::json!({});
-    let result = executor.execute(base_config, &all_patches);
+    let result = executor.execute_owned(base_config, &all_patches);
 
     assert!(
         result.is_ok(),
@@ -111,7 +111,7 @@ fn test_filter_transform_remove_pipeline() {
 
     let mut executor = PatchExecutor::new();
     let base_config = serde_json::json!({"proxies": base_proxies});
-    let result = executor.execute(base_config, &patches);
+    let result = executor.execute_owned(base_config, &patches);
     assert!(
         result.is_ok(),
         "Filter/transform/remove pipeline should succeed"
@@ -180,7 +180,7 @@ fn test_default_injection_edge_cases() {
 
     let mut executor = PatchExecutor::new();
     let config_empty = serde_json::json!({});
-    let result = executor.execute(config_empty, &patches).unwrap();
+    let result = executor.execute_owned(config_empty, &patches).unwrap();
     assert_eq!(
         result["dns"]["enhanced-mode"], "fake-ip",
         "Default should inject when field missing"
@@ -188,7 +188,7 @@ fn test_default_injection_edge_cases() {
 
     let mut executor2 = PatchExecutor::new();
     let config_null = serde_json::json!({"dns": null});
-    let result2 = executor2.execute(config_null, &patches).unwrap();
+    let result2 = executor2.execute_owned(config_null, &patches).unwrap();
     assert_eq!(
         result2["dns"]["enhanced-mode"], "fake-ip",
         "Default should inject when field is null"
@@ -196,7 +196,7 @@ fn test_default_injection_edge_cases() {
 
     let mut executor3 = PatchExecutor::new();
     let config_existing = serde_json::json!({"dns": {"enhanced-mode": "redir-host"}});
-    let result3 = executor3.execute(config_existing, &patches).unwrap();
+    let result3 = executor3.execute_owned(config_existing, &patches).unwrap();
     assert_eq!(
         result3["dns"]["enhanced-mode"], "redir-host",
         "Default should NOT overwrite existing value"
@@ -204,7 +204,7 @@ fn test_default_injection_edge_cases() {
 
     let mut executor4 = PatchExecutor::new();
     let config_arr = serde_json::json!({"fake-ip-filter": []});
-    let _result4 = executor4.execute(config_arr, &patches).unwrap();
+    let _result4 = executor4.execute_owned(config_arr, &patches).unwrap();
     let last_trace = executor4.traces.last().unwrap();
     assert!(last_trace.condition_matched);
 }
@@ -280,7 +280,7 @@ proxies:
 
     let mut executor = PatchExecutor::new();
     let start = std::time::Instant::now();
-    let result = executor.execute(base_config.clone(), &patches);
+    let result = executor.execute_owned(base_config.clone(), &patches);
     let elapsed = start.elapsed();
 
     assert!(result.is_ok(), "Large config execution should succeed");
@@ -446,7 +446,7 @@ fn test_full_e2e_all_eight_operations() {
         serde_json::json!({"enable": true, "enhanced-mode": "fake-ip"}),
         Scope::Global,
     );
-    config = executor.execute(config, &[p1]).unwrap();
+    config = executor.execute_owned(config, &[p1]).unwrap();
     assert_eq!(config["dns"]["enable"], true);
     assert_eq!(config["dns"]["enhanced-mode"], "fake-ip");
 
@@ -457,7 +457,7 @@ fn test_full_e2e_all_eight_operations() {
         serde_json::json!({"enable": true, "stack": "mixed"}),
         Scope::Global,
     );
-    config = executor.execute(config, &[p2]).unwrap();
+    config = executor.execute_owned(config, &[p2]).unwrap();
     assert_eq!(config["tun"]["stack"], "mixed");
     assert_eq!(config["tun"]["enable"], true);
 
@@ -473,7 +473,7 @@ fn test_full_e2e_all_eight_operations() {
         serde_json::Value::Null,
         Scope::Global,
     );
-    config = executor.execute(config, &[p3]).unwrap();
+    config = executor.execute_owned(config, &[p3]).unwrap();
     assert_eq!(config["proxies"].as_array().unwrap().len(), 1);
     assert_eq!(config["proxies"][0]["name"], "HK-01");
 
@@ -489,7 +489,7 @@ fn test_full_e2e_all_eight_operations() {
         serde_json::Value::Null,
         Scope::Global,
     );
-    config = executor.execute(config, &[p4]).unwrap();
+    config = executor.execute_owned(config, &[p4]).unwrap();
     assert_eq!(config["proxies"][0]["name"], "HK-HK-01");
 
     // Op 5: Remove — remove items matching condition
@@ -508,7 +508,7 @@ fn test_full_e2e_all_eight_operations() {
         serde_json::Value::Null,
         Scope::Global,
     );
-    config = executor.execute(config, &[p5]).unwrap();
+    config = executor.execute_owned(config, &[p5]).unwrap();
     assert_eq!(config["proxies"].as_array().unwrap().len(), 1);
     assert_eq!(config["proxies"][0]["name"], "keep-me");
 
@@ -519,7 +519,7 @@ fn test_full_e2e_all_eight_operations() {
         serde_json::json!(["DOMAIN-SUFFIX,google.com,PROXY"]),
         Scope::Global,
     );
-    config = executor.execute(config, &[p6]).unwrap();
+    config = executor.execute_owned(config, &[p6]).unwrap();
     let rules = config["rules"].as_array().unwrap();
     assert_eq!(rules[0], "DOMAIN-SUFFIX,google.com,PROXY");
     assert_eq!(rules[1], "MATCH,DIRECT");
@@ -531,7 +531,7 @@ fn test_full_e2e_all_eight_operations() {
         serde_json::json!(["DOMAIN-SUFFIX,github.com,PROXY"]),
         Scope::Global,
     );
-    config = executor.execute(config, &[p7]).unwrap();
+    config = executor.execute_owned(config, &[p7]).unwrap();
     let rules = config["rules"].as_array().unwrap();
     assert_eq!(rules.last().unwrap(), "DOMAIN-SUFFIX,github.com,PROXY");
 
@@ -542,7 +542,7 @@ fn test_full_e2e_all_eight_operations() {
         serde_json::json!({"enhanced-mode": "redir-host"}),
         Scope::Global,
     );
-    config = executor.execute(config, &[p8]).unwrap();
+    config = executor.execute_owned(config, &[p8]).unwrap();
     assert_eq!(
         config["dns"]["enhanced-mode"], "fake-ip",
         "SetDefault should not overwrite existing value"
@@ -585,7 +585,7 @@ proxies:
     });
 
     let mut executor = PatchExecutor::new();
-    let result = executor.execute(base_config, &patches).unwrap();
+    let result = executor.execute_owned(base_config, &patches).unwrap();
     let proxies = result["proxies"].as_array().unwrap();
 
     assert_eq!(
@@ -629,7 +629,7 @@ fn test_e2e_scope_profile_isolation() {
 
     executor.context.profile_name = Some("profile-a".to_string());
     let config_a = executor
-        .execute(base_config.clone(), &profile_a_patches)
+        .execute_owned(base_config.clone(), &profile_a_patches)
         .unwrap();
     assert_eq!(config_a["dns"]["enable"], true);
     assert!(
@@ -639,7 +639,7 @@ fn test_e2e_scope_profile_isolation() {
 
     executor.context.profile_name = Some("profile-b".to_string());
     let config_b = executor
-        .execute(base_config.clone(), &profile_b_patches)
+        .execute_owned(base_config.clone(), &profile_b_patches)
         .unwrap();
     assert_eq!(config_b["dns"]["ipv6"], false);
     assert!(
@@ -669,11 +669,13 @@ fn test_e2e_global_applies_after_profile() {
     let mut executor = PatchExecutor::new();
 
     executor.context.profile_name = Some("work".to_string());
-    let config = executor.execute(base_config, &profile_patches).unwrap();
+    let config = executor
+        .execute_owned(base_config, &profile_patches)
+        .unwrap();
     assert_eq!(config["mode"], "rule");
 
     executor.context.profile_name = None;
-    let config = executor.execute(config, &global_patches).unwrap();
+    let config = executor.execute_owned(config, &global_patches).unwrap();
     assert_eq!(
         config["mode"], "global",
         "Global should override profile value"
@@ -706,7 +708,7 @@ fn test_e2e_conditional_scope_platform() {
             ..Default::default()
         });
     let result_match = executor_match
-        .execute(base_config.clone(), std::slice::from_ref(&scoped_patch))
+        .execute_owned(base_config.clone(), &[scoped_patch.clone()])
         .unwrap();
     assert_eq!(
         result_match["rules"][0], "DOMAIN-SUFFIX,apple.com,PROXY",
@@ -720,7 +722,7 @@ fn test_e2e_conditional_scope_platform() {
             ..Default::default()
         });
     let result_no_match = executor_no_match
-        .execute(base_config.clone(), &[scoped_patch])
+        .execute_owned(base_config.clone(), &[scoped_patch])
         .unwrap();
     assert_eq!(
         result_no_match["rules"].as_array().unwrap().len(),
@@ -755,7 +757,7 @@ fn test_e2e_conditional_scope_time_range() {
     let base_config = serde_json::json!({"rules": ["MATCH,DIRECT"]});
 
     let mut executor = PatchExecutor::new();
-    let result = executor.execute(base_config, &[patch]).unwrap();
+    let result = executor.execute_owned(base_config, &[patch]).unwrap();
     assert_eq!(
         result["rules"][0], "DOMAIN,time-test,PROXY",
         "Always-active time range should match"
@@ -797,7 +799,7 @@ fn test_e2e_conditional_scope_time_range() {
     );
     let mut executor2 = PatchExecutor::new();
     let result2 = executor2
-        .execute(
+        .execute_owned(
             serde_json::json!({"rules": ["MATCH,DIRECT"]}),
             &[narrow_patch],
         )
@@ -931,7 +933,7 @@ fn test_e2e_override_entire_config() {
 
     let base_config = serde_json::json!({"dns": {"enable": true}, "rules": ["MATCH,DIRECT"]});
     let mut executor = PatchExecutor::new();
-    let result = executor.execute(base_config, &[patch]).unwrap();
+    let result = executor.execute_owned(base_config, &[patch]).unwrap();
 
     // Empty path override replaces the entire config root
     assert_eq!(result["mode"], "rule");
@@ -956,13 +958,13 @@ fn test_e2e_default_nested_path_injection() {
     let base_empty = serde_json::json!({"dns": {"enable": true}});
     let mut executor = PatchExecutor::new();
     let result = executor
-        .execute(base_empty, std::slice::from_ref(&patch))
+        .execute_owned(base_empty, &[patch.clone()])
         .unwrap();
     assert_eq!(result["dns"]["nameservers"][0], "1.1.1.1");
 
     let base_existing = serde_json::json!({"dns": {"nameservers": ["9.9.9.9"]}});
     let mut executor2 = PatchExecutor::new();
-    let result2 = executor2.execute(base_existing, &[patch]).unwrap();
+    let result2 = executor2.execute_owned(base_existing, &[patch]).unwrap();
     assert_eq!(
         result2["dns"]["nameservers"][0], "9.9.9.9",
         "Should preserve existing value"
@@ -993,7 +995,7 @@ fn test_e2e_deep_merge_partial_override() {
     });
 
     let mut executor = PatchExecutor::new();
-    let result = executor.execute(base_config, &[patch]).unwrap();
+    let result = executor.execute_owned(base_config, &[patch]).unwrap();
 
     assert_eq!(result["dns"]["enable"], true);
     assert_eq!(result["dns"]["enhanced-mode"], "fake-ip");
@@ -1021,7 +1023,7 @@ fn test_e2e_empty_rules_array_with_prepend() {
 
     let base_config = serde_json::json!({});
     let mut executor = PatchExecutor::new();
-    let result = executor.execute(base_config, &[patch]).unwrap();
+    let result = executor.execute_owned(base_config, &[patch]).unwrap();
 
     assert!(
         result.get("rules").is_none()
@@ -1055,7 +1057,7 @@ fn test_e2e_filter_removes_all_items() {
     });
 
     let mut executor = PatchExecutor::new();
-    let result = executor.execute(base_config, &[patch]).unwrap();
+    let result = executor.execute_owned(base_config, &[patch]).unwrap();
     let proxies = result["proxies"].as_array().unwrap();
     assert_eq!(
         proxies.len(),
@@ -1088,7 +1090,7 @@ fn test_e2e_transform_preserves_unmatched() {
     });
 
     let mut executor = PatchExecutor::new();
-    let result = executor.execute(base_config, &[patch]).unwrap();
+    let result = executor.execute_owned(base_config, &[patch]).unwrap();
     let proxies = result["proxies"].as_array().unwrap();
     assert_eq!(proxies.len(), 2);
     assert_eq!(proxies[0]["name"], "HK-01-tagged");
@@ -1178,7 +1180,7 @@ proxies:
 
     let mut executor = PatchExecutor::new();
     let start = std::time::Instant::now();
-    let result = executor.execute(base_config, &patches).unwrap();
+    let result = executor.execute_owned(base_config, &patches).unwrap();
     let elapsed = start.elapsed();
 
     let filtered_proxies = result["proxies"].as_array().unwrap();
@@ -1230,10 +1232,10 @@ fn test_e2e_concurrent_profile_execution() {
     let result = executor.execute_pipeline(
         &base_config,
         vec![
-            ("profile-a".to_string(), profile_a_patches),
-            ("profile-b".to_string(), profile_b_patches),
+            ("profile-a".to_string(), profile_a_patches.iter().collect()),
+            ("profile-b".to_string(), profile_b_patches.iter().collect()),
         ],
-        shared_patches,
+        shared_patches.iter().collect(),
     );
 
     assert!(
@@ -1350,7 +1352,7 @@ fn test_e2e_enabled_false_scope_skips_execution() {
     let base_config = serde_json::json!({"rules": ["MATCH,DIRECT"]});
 
     let mut executor = PatchExecutor::new();
-    let result = executor.execute(base_config, &[patch]).unwrap();
+    let result = executor.execute_owned(base_config, &[patch]).unwrap();
 
     assert_eq!(
         result["rules"].as_array().unwrap().len(),
@@ -1390,7 +1392,7 @@ fn test_e2e_ssid_condition_matching() {
             ..Default::default()
         });
     let result = executor_match
-        .execute(base_config.clone(), std::slice::from_ref(&patch))
+        .execute_owned(base_config.clone(), &[patch.clone()])
         .unwrap();
     assert_eq!(result["rules"][0], "DOMAIN,home.local,DIRECT");
     assert!(executor_match.traces[0].condition_matched);
@@ -1400,7 +1402,9 @@ fn test_e2e_ssid_condition_matching() {
             ssid: Some("OfficeWiFi".to_string()),
             ..Default::default()
         });
-    let result2 = executor_no_match.execute(base_config, &[patch]).unwrap();
+    let result2 = executor_no_match
+        .execute_owned(base_config, &[patch])
+        .unwrap();
     assert_eq!(result2["rules"].as_array().unwrap().len(), 1);
     assert!(!executor_no_match.traces[0].condition_matched);
 }

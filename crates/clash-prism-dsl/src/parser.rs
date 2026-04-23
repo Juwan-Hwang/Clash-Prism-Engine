@@ -292,7 +292,7 @@ impl DslParser {
         let mut prepend_val = None;
         let mut append_val = None;
         let mut default_val = None;
-        let mut merge_val = serde_json::Value::Object(serde_json::Map::new());
+        let mut merge_val: Option<serde_json::Value> = None;
 
         for (key, val) in ops_mapping {
             let key_str = match key.as_str() {
@@ -376,17 +376,47 @@ impl DslParser {
                         Self::validate_operation_name(key_str, file_path)?;
                     }
                     // Normal key -> DeepMerge
-                    merge_val = yaml_value_to_json(val).map_err(|e| PrismError::DslParse {
+                    // 多个普通键时合并到 merge_val，而非覆盖
+                    let val = yaml_value_to_json(val).map_err(|e| PrismError::DslParse {
                         message: e,
                         file: file_path.clone(),
                         line: None,
                     })?;
+                    match &mut merge_val {
+                        None => {
+                            merge_val = Some(val);
+                        }
+                        Some(serde_json::Value::Object(target)) => {
+                            if let serde_json::Value::Object(source) = val {
+                                target.extend(source);
+                            } else {
+                                return Err(PrismError::DslParse {
+                                    message: format!(
+                                        "路径 '{}' 已有普通键的值，额外的普通键 '{}' 的值必须是对象类型，用于深度合并",
+                                        path, key_str
+                                    ),
+                                    file: file_path.clone(),
+                                    line: None,
+                                });
+                            }
+                        }
+                        Some(_) => {
+                            return Err(PrismError::DslParse {
+                                message: format!(
+                                    "路径 '{}' 的首个普通键值不是对象类型，无法与额外的普通键 '{}' 合并",
+                                    path, key_str
+                                ),
+                                file: file_path.clone(),
+                                line: None,
+                            });
+                        }
+                    }
                 }
             }
         }
 
         // 如果没有任何操作且没有合并值，跳过
-        if !has_ops && matches!(merge_val, serde_json::Value::Object(ref m) if m.is_empty()) {
+        if !has_ops && merge_val.is_none() {
             return Ok(None);
         }
 
@@ -491,8 +521,11 @@ impl DslParser {
                     value: default.clone(),
                 });
                 (PatchOp::SetDefault, default)
+            } else if let Some(merge) = merge_val {
+                (PatchOp::DeepMerge, merge)
             } else {
-                (PatchOp::DeepMerge, merge_val)
+                tracing::warn!("compile_path_group: 未预期的操作组合，跳过该路径: {}", path);
+                return Ok(None);
             };
 
         let mut patch = Patch::new(source, scope.clone(), path, op, value);
@@ -1002,6 +1035,8 @@ dns:
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].path, "dns");
         assert!(matches!(patches[0].op, PatchOp::DeepMerge));
+        assert_eq!(patches[0].value["enable"], true);
+        assert_eq!(patches[0].value["ipv6"], false);
     }
 
     #[test]
@@ -1031,6 +1066,8 @@ tun:
         let patches = DslParser::parse_str(yaml, None).unwrap();
         assert_eq!(patches.len(), 1);
         assert!(matches!(patches[0].op, PatchOp::Override));
+        assert_eq!(patches[0].value["enable"], true);
+        assert_eq!(patches[0].value["stack"], "mixed");
     }
 
     #[test]
@@ -1045,7 +1082,13 @@ rules:
 "#;
         let patches = DslParser::parse_str(yaml, None).unwrap();
         assert_eq!(patches.len(), 1);
-        assert!(matches!(&patches[0].scope, Scope::Scoped { .. }));
+        match &patches[0].scope {
+            Scope::Scoped { core, platform, .. } => {
+                assert_eq!(core.as_deref(), Some("mihomo"));
+                assert!(platform.is_some());
+            }
+            other => panic!("Expected Scoped, got: {:?}", other),
+        }
     }
 
     #[test]
@@ -1105,6 +1148,7 @@ dns:
         let patches = DslParser::parse_str(yaml, None).unwrap();
         assert_eq!(patches.len(), 1);
         assert!(matches!(patches[0].op, PatchOp::SetDefault));
+        assert_eq!(patches[0].value["enhanced-mode"], "fake-ip");
     }
 
     // ──────────────────────────────────────────────────────
@@ -2435,5 +2479,41 @@ rules:
             }
             other => panic!("Expected Scoped with time_range, got: {:?}", other),
         }
+    }
+
+    /// test_parse_default_null_value -- $default: null 能被正确解析
+    ///
+    /// 验证 $default 的值为 YAML null 时，解析器能正确生成 PatchOp::SetDefault，
+    /// 且 Patch 的 value 字段为 Value::Null。
+    #[test]
+    fn test_parse_default_null_value() {
+        let input = r#"
+dns:
+  $default: null
+"#;
+        let patches = DslParser::parse_str(input, None).unwrap();
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].path, "dns");
+        assert!(matches!(patches[0].op, PatchOp::SetDefault));
+        assert!(
+            patches[0].value.is_null(),
+            "$default: null 的值应为 Value::Null"
+        );
+    }
+
+    /// test_parse_default_null_in_array_field -- 数组字段的 $default: null
+    ///
+    /// 验证 rules 等数组字段的 $default: null 也能被正确解析。
+    #[test]
+    fn test_parse_default_null_in_array_field() {
+        let input = r#"
+rules:
+  $default: null
+"#;
+        let patches = DslParser::parse_str(input, None).unwrap();
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].path, "rules");
+        assert!(matches!(patches[0].op, PatchOp::SetDefault));
+        assert!(patches[0].value.is_null());
     }
 }

@@ -1,7 +1,7 @@
 [package]
 name = "clash-prism-plugin"
 description = "Plugin system with lifecycle hooks, multi-component architecture, and cron scheduling"
-version.workspace = true
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

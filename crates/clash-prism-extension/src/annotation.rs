@@ -97,8 +97,13 @@ pub fn extract_rule_annotations(
         // 遍历 affected_items 中的 Added 条目
         for item in &trace.affected_items {
             if let Some(rule_text) = &item.after {
-                // 在最终配置中查找该规则的索引
-                if let Some(index) = find_rule_index(rules_array, rule_text) {
+                // 预解析对象格式规则（只解析一次，避免内层 R 次重复解析）
+                let pre_parsed = if rule_text.starts_with('{') {
+                    serde_json::from_str::<serde_json::Value>(rule_text).ok()
+                } else {
+                    None
+                };
+                if let Some(index) = find_rule_index(rules_array, rule_text, &pre_parsed) {
                     annotations.push(RuleAnnotation {
                         rule_text: rule_text.clone(),
                         index_in_output: index,
@@ -131,18 +136,17 @@ pub fn extract_rule_annotations(
 /// 支持两种规则格式：
 /// 1. 字符串格式：`"DOMAIN-SUFFIX,example.com,PROXY"`
 /// 2. 对象格式：`{"type": "RULE-SET", "payload": "ruleset.yaml"}`
-fn find_rule_index(rules: &[serde_json::Value], rule_text: &str) -> Option<usize> {
+fn find_rule_index(
+    rules: &[serde_json::Value],
+    rule_text: &str,
+    pre_parsed: &Option<serde_json::Value>,
+) -> Option<usize> {
     rules.iter().rposition(|r| {
-        // 字符串格式：直接比较
         if let Some(s) = r.as_str() {
             return s == rule_text;
         }
-        // 对象格式：解析为 serde_json::Value 后使用语义相等比较，
-        // 不受 JSON 序列化时 key 顺序影响
-        if r.is_object()
-            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(rule_text)
-        {
-            return parsed == *r;
+        if let Some(parsed) = pre_parsed {
+            return *parsed == *r;
         }
         false
     })
@@ -235,4 +239,137 @@ pub fn group_annotations(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clash_prism_core::ir::PatchOp;
+    use clash_prism_core::source::{PatchSource, SourceKind};
+    use clash_prism_core::trace::{AffectedItem, ExecutionTrace, TraceSummary};
+
+    /// Helper: create a minimal ExecutionTrace with an Append op and given affected_items.
+    fn make_append_trace(file: Option<&str>, affected_items: Vec<AffectedItem>) -> ExecutionTrace {
+        ExecutionTrace::new(
+            clash_prism_core::ir::PatchId::new(),
+            PatchSource {
+                kind: SourceKind::YamlFile,
+                file: file.map(|s| s.to_string()),
+                line: None,
+                plugin_id: None,
+            },
+            PatchOp::Append,
+            10,
+            true,
+            TraceSummary::new(affected_items.len(), 0, 0, 0, 0, affected_items.len()),
+            affected_items,
+        )
+    }
+
+    #[test]
+    fn test_find_rule_index_string_match() {
+        let rules = vec![
+            serde_json::json!("DOMAIN-SUFFIX,google.com,PROXY"),
+            serde_json::json!("DOMAIN-KEYWORD,github,PROXY"),
+            serde_json::json!("MATCH,DIRECT"),
+        ];
+        let idx = find_rule_index(&rules, "DOMAIN-KEYWORD,github,PROXY", &None);
+        assert_eq!(idx, Some(1), "应精确匹配到索引 1");
+    }
+
+    #[test]
+    fn test_find_rule_index_no_match() {
+        let rules = vec![
+            serde_json::json!("DOMAIN-SUFFIX,google.com,PROXY"),
+            serde_json::json!("MATCH,DIRECT"),
+        ];
+        let idx = find_rule_index(&rules, "DOMAIN-KEYWORD,github,PROXY", &None);
+        assert_eq!(idx, None, "无匹配应返回 None");
+    }
+
+    #[test]
+    fn test_find_rule_index_rposition_strategy() {
+        // 重复规则：rposition 应返回最后一个匹配
+        let rules = vec![
+            serde_json::json!("DOMAIN-SUFFIX,ad.com,REJECT"),
+            serde_json::json!("MATCH,DIRECT"),
+            serde_json::json!("DOMAIN-SUFFIX,ad.com,REJECT"),
+        ];
+        let idx = find_rule_index(&rules, "DOMAIN-SUFFIX,ad.com,REJECT", &None);
+        assert_eq!(
+            idx,
+            Some(2),
+            "重复规则时 rposition 应返回最后一个匹配（索引 2）"
+        );
+    }
+
+    #[test]
+    fn test_extract_rule_annotations_empty_traces() {
+        let output_config = serde_json::json!({
+            "rules": ["DOMAIN-SUFFIX,google.com,PROXY"]
+        });
+        let annotations = extract_rule_annotations(&[], &output_config);
+        assert!(annotations.is_empty(), "空 traces 应返回空注解");
+    }
+
+    #[test]
+    fn test_extract_rule_annotations_no_rules_field() {
+        let trace = make_append_trace(
+            Some("ad-filter.prism.yaml"),
+            vec![AffectedItem::added(0, "DOMAIN-SUFFIX,ad.com,REJECT")],
+        );
+        let output_config = serde_json::json!({
+            "dns": { "enable": true }
+        });
+        let annotations = extract_rule_annotations(&[trace], &output_config);
+        assert!(annotations.is_empty(), "输出配置无 rules 字段应返回空注解");
+    }
+
+    #[test]
+    fn test_source_label_strip_prefix() {
+        // 验证 "01-ad-filter.prism.yaml" → "ad-filter"
+        let label = {
+            let source_file = "01-ad-filter.prism.yaml";
+            let mut label = source_file
+                .replace(".prism.yaml", "")
+                .replace(".prism.yml", "");
+            loop {
+                let trimmed = label.trim_start_matches(|c: char| c.is_numeric());
+                if trimmed.starts_with('-') && trimmed.len() > 1 {
+                    label = trimmed[1..].to_string();
+                } else {
+                    break;
+                }
+            }
+            label
+        };
+        assert_eq!(
+            label, "ad-filter",
+            "\"01-ad-filter.prism.yaml\" 的 source_label 应为 \"ad-filter\""
+        );
+    }
+
+    #[test]
+    fn test_source_label_no_prefix() {
+        // 验证 "rules.prism.yaml" → "rules"
+        let label = {
+            let source_file = "rules.prism.yaml";
+            let mut label = source_file
+                .replace(".prism.yaml", "")
+                .replace(".prism.yml", "");
+            loop {
+                let trimmed = label.trim_start_matches(|c: char| c.is_numeric());
+                if trimmed.starts_with('-') && trimmed.len() > 1 {
+                    label = trimmed[1..].to_string();
+                } else {
+                    break;
+                }
+            }
+            label
+        };
+        assert_eq!(
+            label, "rules",
+            "\"rules.prism.yaml\" 的 source_label 应为 \"rules\""
+        );
+    }
 }

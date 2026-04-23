@@ -34,15 +34,13 @@ impl From<PluginLoadError> for PrismError {
         match err {
             PluginLoadError::Io(e) => PrismError::from(e),
             PluginLoadError::ManifestParse(e) => PrismError::Serialization(e),
-            PluginLoadError::Validation(msg) => PrismError::DslParse {
+            PluginLoadError::Validation(msg) => PrismError::Validation {
                 message: msg,
-                file: None,
-                line: None,
+                path: None,
             },
-            PluginLoadError::NotFound(id) => PrismError::DslParse {
+            PluginLoadError::NotFound(id) => PrismError::Validation {
                 message: format!("未找到插件: {}", id),
-                file: None,
-                line: None,
+                path: None,
             },
         }
     }
@@ -152,7 +150,7 @@ impl PluginLoader {
 
     /// 加载指定插件（验证清单 + 检查权限）
     pub fn load(&mut self, plugin_id: &str) -> Result<LoadedPlugin> {
-        if plugin_id.contains("..") || plugin_id.contains('\0') {
+        if plugin_id.contains("..") || plugin_id.contains('\0') || plugin_id.contains('/') {
             return Err(PluginLoadError::Validation(format!(
                 "插件 ID '{}' 包含非法字符（路径遍历攻击嫌疑）",
                 plugin_id
@@ -710,5 +708,64 @@ fn validate_cron_field_range(field: &str, min: u32, max: u32) -> bool {
 impl Default for PluginLoader {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_plugin_load_error_io_mapping() {
+        let err = PluginLoadError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
+        let prism_err: PrismError = err.into();
+        match prism_err {
+            PrismError::Io { detail, .. } => {
+                assert!(detail.contains("file not found"));
+            }
+            other => panic!("Expected PrismError::Io, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plugin_load_error_manifest_parse_mapping() {
+        let err = PluginLoadError::ManifestParse(
+            serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err(),
+        );
+        let prism_err: PrismError = err.into();
+        match prism_err {
+            PrismError::Serialization(_) => {}
+            other => panic!("Expected PrismError::Serialization, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plugin_load_error_validation_mapping() {
+        let err = PluginLoadError::Validation("missing required field: id".to_string());
+        let prism_err: PrismError = err.into();
+        match prism_err {
+            PrismError::Validation { message, path } => {
+                assert_eq!(message, "missing required field: id");
+                assert!(path.is_none());
+            }
+            other => panic!("Expected PrismError::Validation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plugin_load_error_not_found_mapping() {
+        let err = PluginLoadError::NotFound("my-plugin".to_string());
+        let prism_err: PrismError = err.into();
+        match prism_err {
+            PrismError::Validation { message, path } => {
+                assert!(message.contains("my-plugin"));
+                assert!(message.contains("未找到插件"));
+                assert!(path.is_none());
+            }
+            other => panic!("Expected PrismError::Validation, got: {:?}", other),
+        }
     }
 }

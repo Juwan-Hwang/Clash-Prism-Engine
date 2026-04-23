@@ -57,7 +57,10 @@ fn validate_path_within_base(rel: &str, base_dir: &Path) -> Result<PathBuf, Stri
     let canonical_abs = abs.canonicalize().map_err(|_e| {
         let abs_str = abs.to_string_lossy();
         let base_str = canonical_base.to_string_lossy();
-        if !abs_str.starts_with(&*base_str) {
+        if !abs_str.starts_with(&*base_str)
+            || abs_str.len() > base_str.len()
+                && !abs_str[base_str.len()..].starts_with(std::path::MAIN_SEPARATOR)
+        {
             format!(
                 "路径遍历攻击检测（字符串级别回退）: '{}' 不在 base_dir '{}' 内",
                 abs.display(),

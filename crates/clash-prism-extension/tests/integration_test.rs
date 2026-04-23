@@ -68,6 +68,52 @@ impl PrismHost for TestHost {
     }
 }
 
+/// 只读测试宿主
+///
+/// `apply_config` 不更新 `running_config`，使多次 apply 的 base config 始终相同。
+/// 用于测试解析缓存一致性等需要稳定 base config 的场景。
+struct ReadOnlyTestHost {
+    running_config: Mutex<String>,
+    workspace: PathBuf,
+}
+
+impl ReadOnlyTestHost {
+    fn new(config: &str, workspace: PathBuf) -> Self {
+        Self {
+            running_config: Mutex::new(config.to_string()),
+            workspace,
+        }
+    }
+}
+
+impl PrismHost for ReadOnlyTestHost {
+    fn read_running_config(&self) -> Result<String, String> {
+        Ok(self.running_config.lock().unwrap().clone())
+    }
+
+    fn apply_config(&self, _config: &str) -> Result<ApplyStatus, String> {
+        // 不更新 running_config，保持 base config 不变
+        Ok(ApplyStatus {
+            files_saved: true,
+            hot_reload_success: true,
+            message: "配置已更新".to_string(),
+            restarted: false,
+        })
+    }
+
+    fn get_prism_workspace(&self) -> Result<PathBuf, String> {
+        Ok(self.workspace.clone())
+    }
+
+    fn notify(&self, _event: PrismEvent) {
+        // 测试中不需要处理事件通知
+    }
+
+    fn validate_config(&self, _config: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+}
+
 /// 构造一个基础 mihomo 配置（JSON -> YAML）
 fn base_config_yaml() -> String {
     let config = serde_json::json!({
@@ -110,8 +156,12 @@ fn test_apply_empty_workspace() {
     assert!(result.trace.is_empty());
     assert!(result.rule_annotations.is_empty());
 
-    // 输出配置应包含原始 rules
-    assert!(result.output_config.contains("MATCH,DIRECT"));
+    // 输出配置应与输入完全一致
+    assert_eq!(
+        result.output_config.trim(),
+        base_config_yaml().trim(),
+        "空 workspace 输出应与输入完全一致"
+    );
 }
 
 /// test_apply_single_prepend -- 创建一个包含 $prepend 的 .prism.yaml 文件
@@ -168,6 +218,18 @@ rules:
 
     // 验证 diff 视图记录了新增项
     assert_eq!(result.trace[0].diff.added.len(), 2);
+
+    // 验证规则顺序和数量
+    // $prepend 保持声明顺序
+    let output: serde_json::Value = serde_yml::from_str(&result.output_config).unwrap();
+    let rules = output["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 3, "应有 2 条 prepend + 1 条原始规则");
+    assert_eq!(rules[0].as_str().unwrap(), "DOMAIN-SUFFIX,ad.com,REJECT");
+    assert_eq!(
+        rules[1].as_str().unwrap(),
+        "DOMAIN-SUFFIX,ads.example.com,REJECT"
+    );
+    assert_eq!(rules[2].as_str().unwrap(), "MATCH,DIRECT");
 }
 
 /// test_toggle_group -- 创建 .prism.yaml 文件，toggle_group(false) 后验证文件被重命名为 .disabled
@@ -245,7 +307,7 @@ dns:
     let status = ext.status();
     assert!(status.last_compile_success, "apply 后编译状态应为成功");
     assert!(status.last_compile_time.is_some(), "apply 后编译时间应有值");
-    assert!(status.patch_count > 0, "apply 后 patch_count 应大于 0");
+    assert_eq!(status.patch_count, 1, "apply 后 patch_count 应为 1");
 
     // 验证编译时间是有效的 ISO 8601 格式
     let time_str = status.last_compile_time.unwrap();
@@ -317,6 +379,11 @@ rules:
     );
     assert_eq!(groups[0].group_id, "my-rules.prism.yaml");
     assert_eq!(groups[0].rules.len(), 2, "规则组应包含 2 条规则");
+    // $prepend 保持声明顺序
+    assert_eq!(groups[0].rules[0].raw, "DOMAIN-SUFFIX,example.com,DIRECT");
+    assert_eq!(groups[0].rules[0].index, 0);
+    assert_eq!(groups[0].rules[1].raw, "DOMAIN-KEYWORD,test,REJECT");
+    assert_eq!(groups[0].rules[1].index, 1);
 }
 
 /// test_insert_rule -- 测试 insert_rule 功能
@@ -351,8 +418,8 @@ rules:
         )
         .unwrap();
 
-    // 验证插入位置合理（至少在 MATCH,DIRECT 之后）
-    assert!(idx > 0, "插入索引应大于 0");
+    // 验证插入位置合理（Append 到 2 条规则之后，索引应为 2）
+    assert_eq!(idx, 2, "Append 到 2 条规则之后，索引应为 2");
 
     // insert_rule 内部调用 host.apply_config，TestHost 会更新 running_config
     // 验证 insert_rule 后内部状态被正确失效（last_patches/last_traces 已清空）
@@ -439,4 +506,242 @@ fn test_toggle_group_path_traversal() {
     // 尝试使用包含反斜杠的 group_id
     let result = ext.toggle_group("sub\\dir\\file.prism.yaml", false);
     assert!(result.is_err(), "包含反斜杠的 group_id 应被拒绝");
+}
+
+/// test_is_prism_rule_positive -- is_prism_rule 对已知 Prism 规则返回正确信息
+///
+/// 验证 HashMap 索引命中路径：apply 后对 Prism 注入的规则调用 is_prism_rule()，
+/// 应返回 is_prism: true 且 group/label 正确。
+#[test]
+fn test_is_prism_rule_positive() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+
+    let prism_file = workspace.join("rules.prism.yaml");
+    let prism_content = r#"
+rules:
+  $prepend:
+    - "DOMAIN-SUFFIX,managed.example.com,PROXY"
+"#;
+    std::fs::write(&prism_file, prism_content).unwrap();
+
+    let host = TestHost::new(&base_config_yaml(), workspace);
+    let ext = PrismExtension::new(host);
+
+    let result = ext.apply(ApplyOptions::default()).unwrap();
+    assert_eq!(result.stats.total_added, 1);
+
+    // Prism 注入的规则在索引 0（prepend 到 rules 数组头部）
+    let is_prism = ext.is_prism_rule(0).unwrap();
+    assert!(is_prism.is_prism, "索引 0 应为 Prism 管理的规则");
+    assert_eq!(
+        is_prism.group.as_deref(),
+        Some("rules.prism.yaml"),
+        "group 应为来源文件名"
+    );
+    assert!(is_prism.label.is_some(), "label 应有值（来源标签）");
+    assert_eq!(
+        is_prism.label.as_deref(),
+        Some("rules"),
+        "label 应为来源文件名（去掉 .prism.yaml 后缀）"
+    );
+}
+
+/// test_is_prism_rule_non_prism -- is_prism_rule 对原始配置中的非 Prism 规则返回 false
+#[test]
+fn test_is_prism_rule_non_prism() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+
+    let prism_file = workspace.join("rules.prism.yaml");
+    let prism_content = r#"
+rules:
+  $prepend:
+    - "DOMAIN-SUFFIX,managed.example.com,PROXY"
+"#;
+    std::fs::write(&prism_file, prism_content).unwrap();
+
+    let host = TestHost::new(&base_config_yaml(), workspace);
+    let ext = PrismExtension::new(host);
+
+    ext.apply(ApplyOptions::default()).unwrap();
+
+    // 原始配置中的 MATCH,DIRECT 在 prepend 之后，索引为 1
+    let is_prism = ext.is_prism_rule(1).unwrap();
+    assert!(
+        !is_prism.is_prism,
+        "原始 MATCH,DIRECT 不应被标记为 Prism 规则"
+    );
+    assert!(is_prism.group.is_none());
+    assert!(is_prism.label.is_none());
+}
+
+/// test_insert_rule_clears_annotations -- insert_rule 后 list_rules 应返回空
+///
+/// 验证 insert_rule() 正确清空了 last_annotations 和 annotation_index，
+/// 避免索引偏移后返回错误数据。
+#[test]
+fn test_insert_rule_clears_annotations() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+
+    let prism_file = workspace.join("rules.prism.yaml");
+    let prism_content = r#"
+rules:
+  $prepend:
+    - "DOMAIN-SUFFIX,ad.com,REJECT"
+"#;
+    std::fs::write(&prism_file, prism_content).unwrap();
+
+    let host = TestHost::new(&base_config_yaml(), workspace);
+    let ext = PrismExtension::new(host);
+
+    // apply 后应有 1 个规则组
+    ext.apply(ApplyOptions::default()).unwrap();
+    let groups = ext.list_rules().unwrap();
+    assert_eq!(groups.len(), 1, "apply 后应有 1 个规则组");
+
+    // insert_rule 后注解应被清空
+    ext.insert_rule_str(
+        "DOMAIN-KEYWORD,custom,DIRECT",
+        &clash_prism_extension::RuleInsertPosition::Append,
+    )
+    .unwrap();
+
+    let groups = ext.list_rules().unwrap();
+    assert!(
+        groups.is_empty(),
+        "insert_rule 后注解应被清空，list_rules 应返回空"
+    );
+}
+
+/// test_parse_cache_consistency -- 连续两次 apply 输出完全一致
+///
+/// 使用 ReadOnlyTestHost（apply_config 不更新 running_config），
+/// 确保两次 apply 的 base config 完全相同。
+/// 验证文件级解析缓存不会导致第二次 apply 产生不同结果。
+#[test]
+fn test_parse_cache_consistency() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+
+    let prism_file = workspace.join("cache-test.prism.yaml");
+    let prism_content = r#"
+rules:
+  $prepend:
+    - "DOMAIN-SUFFIX,cache.test,PROXY"
+    - "DOMAIN-KEYWORD,cached,REJECT"
+dns:
+  nameserver:
+    $prepend:
+      - "223.5.5.5"
+"#;
+    std::fs::write(&prism_file, prism_content).unwrap();
+
+    let host = ReadOnlyTestHost::new(&base_config_yaml(), workspace);
+    let ext = PrismExtension::new(host);
+
+    // 第一次 apply
+    let result1 = ext.apply(ApplyOptions::default()).unwrap();
+    assert_eq!(result1.stats.succeeded, 2);
+
+    // 第二次 apply（文件内容未变，应命中缓存）
+    let result2 = ext.apply(ApplyOptions::default()).unwrap();
+    assert_eq!(result2.stats.succeeded, 2, "缓存命中后 patch 数应一致");
+
+    // 输出配置应完全一致（base config 相同 + 缓存命中 = 结果相同）
+    assert_eq!(
+        result1.output_config, result2.output_config,
+        "连续两次 apply（相同 base config）的输出配置应完全一致"
+    );
+}
+
+/// test_parse_cache_invalidation -- 修改文件后缓存应失效
+///
+/// 使用 ReadOnlyTestHost 确保 base config 不变，
+/// 验证修改 .prism.yaml 内容后重新 apply，结果反映新内容且旧内容不存在。
+#[test]
+fn test_parse_cache_invalidation() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+
+    let prism_file = workspace.join("mutable.prism.yaml");
+    std::fs::write(
+        &prism_file,
+        "rules:\n  $prepend:\n    - \"DOMAIN-SUFFIX,v1.example.com,PROXY\"\n",
+    )
+    .unwrap();
+
+    let host = ReadOnlyTestHost::new(&base_config_yaml(), workspace);
+    let ext = PrismExtension::new(host);
+
+    let result1 = ext.apply(ApplyOptions::default()).unwrap();
+    assert!(
+        result1.output_config.contains("v1"),
+        "第一次 apply 应包含 v1 规则"
+    );
+
+    // 修改文件内容
+    std::fs::write(
+        &prism_file,
+        "rules:\n  $prepend:\n    - \"DOMAIN-SUFFIX,v2.example.com,PROXY\"\n",
+    )
+    .unwrap();
+
+    let result2 = ext.apply(ApplyOptions::default()).unwrap();
+    assert!(
+        result2.output_config.contains("v2"),
+        "修改文件后 apply 应反映新内容"
+    );
+    assert!(
+        !result2.output_config.contains("v1"),
+        "修改文件后旧内容不应存在"
+    );
+}
+
+/// test_object_rule_annotation -- 对象格式规则的注解正确性
+///
+/// 验证 find_rule_index 的 pre_parsed 分支能正确处理 JSON 对象规则。
+#[test]
+fn test_object_rule_annotation() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+
+    // 使用对象格式规则（rule-set 类型）
+    let prism_file = workspace.join("obj-rules.prism.yaml");
+    let prism_content = r#"
+rules:
+  $prepend:
+    - {"type": "RULE-SET", "payload": "category-ads-all"}
+"#;
+    std::fs::write(&prism_file, prism_content).unwrap();
+
+    // 基础配置中包含一个已有的对象格式规则
+    let config = serde_json::json!({
+        "mixed-port": 7890,
+        "mode": "rule",
+        "rules": [
+            {"type": "RULE-SET", "payload": "existing-ruleset"},
+            "MATCH,DIRECT"
+        ]
+    });
+    let config_yaml = serde_yml::to_string(&config).unwrap();
+
+    let host = TestHost::new(&config_yaml, workspace);
+    let ext = PrismExtension::new(host);
+
+    let result = ext.apply(ApplyOptions::default()).unwrap();
+    assert_eq!(result.stats.total_added, 1);
+
+    // list_rules 应正确识别对象格式规则
+    let groups = ext.list_rules().unwrap();
+    assert_eq!(groups.len(), 1, "应有 1 个规则组");
+    assert_eq!(groups[0].rules.len(), 1, "应包含 1 条 Prism 管理的规则");
+
+    // is_prism_rule 应对 Prism 注入的对象规则返回 true
+    let is_prism = ext.is_prism_rule(0).unwrap();
+    assert!(
+        is_prism.is_prism,
+        "对象格式规则应被正确标记为 Prism 管理的规则"
+    );
 }

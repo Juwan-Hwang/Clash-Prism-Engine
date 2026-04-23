@@ -620,7 +620,7 @@ mod tests {
 
         // 清理 0 秒前的缓存（应全部清理）
         let cleaned = cache.cleanup(Duration::from_secs(0)).unwrap();
-        assert!(cleaned >= 1);
+        assert_eq!(cleaned, 1);
 
         let value: Option<String> = cache.get("old_key");
         assert_eq!(value, None);
