@@ -12,7 +12,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ─── Build & Release ────────────────────────────────────
   release:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -22,20 +21,12 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: prism-cli
-            asset_name: prism-cli-x86_64-linux-gnu
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact_name: prism-cli
-            asset_name: prism-cli-x86_64-apple-darwin
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact_name: prism-cli
-            asset_name: prism-cli-aarch64-apple-darwin
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact_name: prism-cli.exe
-            asset_name: prism-cli-x86_64-pc-windows-msvc.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -56,17 +47,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-release-${{ matrix.target }}-
 
-      - name: Build release binary
-        run: cargo build --package prism-cli --release --target ${{ matrix.target }}
+      - name: Build release binaries
+        run: |
+          cargo build --package prism-cli --release --target ${{ matrix.target }}
+          cargo build --package clash-prism-ext --release --target ${{ matrix.target }}
 
-      - name: Upload artifact
+      - name: Upload prism-cli artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          name: prism-cli-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/prism-cli${{ contains(matrix.target, 'windows') && '.exe' || '' }}
           retention-days: 1
 
-  # ─── Create GitHub Release ──────────────────────────────
+      - name: Upload clash-prism-ext artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clash-prism-ext-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/clash-prism-ext${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+          retention-days: 1
+
   publish:
     name: Publish Release
     needs: release
@@ -82,10 +81,14 @@ jobs:
       - name: Flatten and rename artifacts
         run: |
           mkdir -p release
-          cp artifacts/prism-cli-x86_64-linux-gnu/prism-cli release/prism-cli-x86_64-linux-gnu 2>/dev/null || true
+          cp artifacts/prism-cli-x86_64-unknown-linux-gnu/prism-cli release/prism-cli-x86_64-linux-gnu 2>/dev/null || true
           cp artifacts/prism-cli-x86_64-apple-darwin/prism-cli release/prism-cli-x86_64-apple-darwin 2>/dev/null || true
           cp artifacts/prism-cli-aarch64-apple-darwin/prism-cli release/prism-cli-aarch64-apple-darwin 2>/dev/null || true
           cp artifacts/prism-cli-x86_64-pc-windows-msvc.exe/prism-cli.exe release/prism-cli-x86_64-pc-windows-msvc.exe 2>/dev/null || true
+          cp artifacts/clash-prism-ext-x86_64-unknown-linux-gnu/clash-prism-ext release/clash-prism-ext-x86_64-linux-gnu 2>/dev/null || true
+          cp artifacts/clash-prism-ext-x86_64-apple-darwin/clash-prism-ext release/clash-prism-ext-x86_64-apple-darwin 2>/dev/null || true
+          cp artifacts/clash-prism-ext-aarch64-apple-darwin/clash-prism-ext release/clash-prism-ext-aarch64-apple-darwin 2>/dev/null || true
+          cp artifacts/clash-prism-ext-x86_64-pc-windows-msvc.exe/clash-prism-ext.exe release/clash-prism-ext-x86_64-pc-windows-msvc.exe 2>/dev/null || true
           echo "=== Release files ==="
           ls -lh release/
 
@@ -104,4 +107,8 @@ jobs:
             release/prism-cli-x86_64-apple-darwin
             release/prism-cli-aarch64-apple-darwin
             release/prism-cli-x86_64-pc-windows-msvc.exe
+            release/clash-prism-ext-x86_64-linux-gnu
+            release/clash-prism-ext-x86_64-apple-darwin
+            release/clash-prism-ext-aarch64-apple-darwin
+            release/clash-prism-ext-x86_64-pc-windows-msvc.exe
             release/checksums-sha256.txt
