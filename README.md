@@ -46,7 +46,7 @@ Prism Engine 有两种使用方式：
 clash-prism-extension = "0.1.2"
 ```
 
-实现 `PrismHost` trait（4 个方法），即可获得完整的配置管理能力：
+实现 `PrismHost` trait（4 个必须方法），即可获得完整的配置管理能力：
 
 ```rust
 pub trait PrismHost: Send + Sync {
@@ -54,6 +54,9 @@ pub trait PrismHost: Send + Sync {
     fn apply_config(&self, config: &str, status: &ApplyStatus) -> Result<()>;  // 写入配置
     fn get_prism_workspace(&self) -> Result<PathBuf>;      // 获取工作目录
     fn notify(&self, event: PrismEvent);                   // 接收事件通知
+
+    // 可选：覆盖以启用 __when__.profile 条件匹配
+    fn get_current_profile(&self) -> Option<String> { None }
 }
 ```
 

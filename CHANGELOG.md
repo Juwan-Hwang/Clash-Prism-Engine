@@ -5,6 +5,16 @@ All notable changes to Prism Engine will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **profile_name 未注入 ExecutionContext** — `compile_pipeline` 中创建 `PatchExecutor` 时未设置 `context.profile_name`，导致 `__when__.profile` 条件匹配始终失败（所有带 profile 条件的 Patch 被静默跳过）；改为通过 `PatchExecutor::with_context()` 从 `PrismHost::get_current_profile()` 获取并注入
+
+### Added
+
+- **PrismHost::get_current_profile()** — 新增默认方法，返回当前激活的 Profile 名称（默认 `None`），GUI 接入方可覆盖此方法以启用 `__when__.profile` 条件匹配
+
 ## [0.1.2] - 2026-04-21
 
 ### Performance

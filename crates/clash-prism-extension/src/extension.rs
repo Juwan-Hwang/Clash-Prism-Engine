@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use clash_prism_core::compiler::PatchCompiler;
-use clash_prism_core::executor::PatchExecutor;
+use clash_prism_core::executor::{ExecutionContext, PatchExecutor};
 use clash_prism_core::ir::Patch;
 use clash_prism_dsl::DslParser;
 
@@ -902,7 +902,10 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
             .filter_map(|id| patch_index.get(id.as_str()).copied())
             .collect();
 
-        let mut executor = PatchExecutor::new();
+        let mut executor = PatchExecutor::with_context(ExecutionContext {
+            profile_name: self.host.get_current_profile(),
+            ..ExecutionContext::default()
+        });
         let config = executor
             .execute(base_config, &sorted_patches)
             .map_err(|e| format!("Patch 执行错误: {}", e))?;

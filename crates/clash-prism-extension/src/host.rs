@@ -25,6 +25,9 @@
 //! | [`list_profiles`](PrismHost::list_profiles) | 返回 `Err("not implemented")` |
 //! | [`get_core_info`](PrismHost::get_core_info) | 返回 `Err("not implemented")` |
 //! | [`validate_config`](PrismHost::validate_config) | 返回 `Err("not implemented")` |
+//! | [`script_count`](PrismHost::script_count) | 返回 `Ok(0)` |
+//! | [`plugin_count`](PrismHost::plugin_count) | 返回 `Ok(0)` |
+//! | [`get_current_profile`](PrismHost::get_current_profile) | 返回 `None`（`__when__.profile` 条件匹配依赖此方法） |
 
 use std::path::PathBuf;
 
@@ -364,5 +367,35 @@ pub trait PrismHost: Send + Sync {
     /// 获取已注册的插件数量（由 Host 实现，默认返回 0）
     fn plugin_count(&self) -> Result<usize, String> {
         Ok(0)
+    }
+
+    /// 获取当前激活的 Profile 名称
+    ///
+    /// 编译管道通过此方法获取当前激活的订阅/Profile 名称，
+    /// 用于 `__when__.profile` 条件匹配。当 Patch 声明了 profile 条件时，
+    /// 编译器会将此返回值与 Patch 的 profile 进行比较，决定是否执行。
+    ///
+    /// 默认返回 `None`，此时所有带 `__when__.profile` 条件的 Patch 都会被跳过。
+    ///
+    /// # 值格式契约
+    ///
+    /// **此方法的返回值必须与 DSL 文件中 `__when__.profile` 的写法一致。**
+    ///
+    /// 引擎使用精确匹配（支持正则 `/pattern/` 和通配符 `*?`），
+    /// 不会对返回值做任何 normalize。如果返回值与 DSL 中的值不一致，
+    /// 匹配将失败，Patch 会被跳过。
+    ///
+    /// ```yaml
+    /// # DSL 中的写法
+    /// __when__:
+    ///   profile: "我的订阅"        # ← get_current_profile() 应返回 "我的订阅"
+    ///   profile: "/work-.*/"       # ← get_current_profile() 返回 "work-prod" 即可匹配
+    ///   profile: "我的订阅.yaml"   # ← get_current_profile() 应返回 "我的订阅.yaml"
+    /// ```
+    ///
+    /// 如果 GUI 侧的 profile 标识包含 `.yaml` 后缀但 DSL 中不写后缀，
+    /// 实现方应在此方法中 strip 后缀（或反过来），确保两端一致。
+    fn get_current_profile(&self) -> Option<String> {
+        None
     }
 }

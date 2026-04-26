@@ -46,7 +46,7 @@ If you're building a mihomo / Clash GUI client (e.g., a Tauri app), embed Prism 
 clash-prism-extension = "0.1.2"
 ```
 
-Implement the `PrismHost` trait (4 methods) to get full configuration management:
+Implement the `PrismHost` trait (4 required methods) to get full configuration management:
 
 ```rust
 pub trait PrismHost: Send + Sync {
@@ -54,6 +54,9 @@ pub trait PrismHost: Send + Sync {
     fn apply_config(&self, config: &str, status: &ApplyStatus) -> Result<()>;  // Write config
     fn get_prism_workspace(&self) -> Result<PathBuf>;      // Get workspace directory
     fn notify(&self, event: PrismEvent);                   // Receive event notifications
+
+    // Optional: override to enable __when__.profile condition matching
+    fn get_current_profile(&self) -> Option<String> { None }
 }
 ```
 
