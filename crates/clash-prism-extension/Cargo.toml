@@ -10,7 +10,8 @@ description = "UI Extension interface for integrating Prism Engine into Mihomo G
 
 [dependencies]
 clash-prism-core = { version = "0.1.2" }
-clash-prism-dsl = { version = "0.1.0" }
+clash-prism-dsl = { version = "0.1.2" }
+regex = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

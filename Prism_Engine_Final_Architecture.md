@@ -1614,7 +1614,7 @@ pub fn format_user_facing_error(err: &PrismError) -> UserError;
 ### Phase 5: Extension 接口层（已完成）
 
 - [x] `clash-prism-extension` crate 骨架
-- [x] `PrismHost` trait（4 必须 + 7 可选方法）
+- [x] `PrismHost` trait（4 必须 + 8 可选方法）
 - [x] `PrismExtension<H>` 结构（apply / list_rules / preview_rules / toggle_group / status / start_watching / stop_watching / get_trace / get_stats）
 - [x] 支持类型（ApplyResult / ApplyOptions / PrismEvent / RuleAnnotation / RuleGroup / RuleDiff）
 - [x] 规则注解系统（RuleAnnotation + group_annotations）
@@ -1682,7 +1682,7 @@ pub trait PrismHost: Send + Sync {
     fn get_prism_workspace(&self) -> Result<PathBuf, String>;
     fn notify(&self, event: PrismEvent);
 
-    // ── 可选实现 (7 个，有默认实现) ──
+    // ── 可选实现 (8 个，有默认实现) ──
     fn read_raw_profile(&self, profile_id: &str) -> Result<String, String>;
     fn list_profiles(&self) -> Result<Vec<ProfileInfo>, String>;
     fn get_core_info(&self) -> Result<CoreInfo, String>;
@@ -1690,6 +1690,7 @@ pub trait PrismHost: Send + Sync {
     fn script_count(&self) -> Result<usize, String>;
     fn plugin_count(&self) -> Result<usize, String>;
     fn get_current_profile(&self) -> Option<String>;  // __when__.profile 条件匹配依赖此方法
+    fn get_variables(&self) -> HashMap<String, String>;  // {{var}} 模板替换依赖此方法
 }
 ```
 

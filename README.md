@@ -57,6 +57,9 @@ pub trait PrismHost: Send + Sync {
 
     // 可选：覆盖以启用 __when__.profile 条件匹配
     fn get_current_profile(&self) -> Option<String> { None }
+
+    // 可选：覆盖以启用 {{var}} 变量模板替换
+    fn get_variables(&self) -> HashMap<String, String> { HashMap::new() }
 }
 ```
 

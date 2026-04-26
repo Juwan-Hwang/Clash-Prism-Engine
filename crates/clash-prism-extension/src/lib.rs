@@ -91,6 +91,7 @@ mod annotation;
 mod extension;
 mod host;
 mod types;
+mod variables;
 
 pub use extension::{IsPrismRule, PrismExtension};
 pub use host::{ApplyStatus, CoreInfo, PatchStats, PrismEvent, PrismHost, ProfileInfo};

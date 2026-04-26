@@ -844,6 +844,8 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
 
         let mut compiler = PatchCompiler::new();
         let mut new_cache_entries: Vec<(String, (String, Vec<Patch>))> = Vec::new();
+        let mut all_file_vars: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
 
         for (file_name, content) in &prism_files {
             // 计算文件内容 SHA-256 hash
@@ -870,13 +872,19 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
                 continue;
             }
 
-            // 缓存未命中：重新解析
-            let patches = DslParser::parse_str(content, Some(std::path::PathBuf::from(file_name)))
-                .map_err(|e| format!("DSL 解析错误 [{}]: {}", file_name, e))?;
+            // 缓存未命中：重新解析（同时提取 __vars__ 声明）
+            let (patches, file_vars) =
+                DslParser::parse_str_with_vars(content, Some(std::path::PathBuf::from(file_name)))
+                    .map_err(|e| format!("DSL 解析错误 [{}]: {}", file_name, e))?;
             compiler
                 .register_patches(file_name.clone(), patches.clone())
                 .map_err(|e| format!("Patch 注册错误 [{}]: {}", file_name, e))?;
             new_cache_entries.push((file_name.clone(), (hash, patches)));
+
+            // 收集文件级变量默认值（后出现的文件不覆盖先出现的）
+            for (k, v) in &file_vars {
+                all_file_vars.entry(k.clone()).or_insert_with(|| v.clone());
+            }
         }
 
         // 更新解析缓存
@@ -902,17 +910,54 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
             .filter_map(|id| patch_index.get(id.as_str()).copied())
             .collect();
 
+        // 变量模板替换：Host 变量 > __vars__ 文件默认值 > {{var|inline_default}}
+        let host_vars = self.host.get_variables();
+        let mut resolved_vars = all_file_vars; // 文件级默认值作为基础
+        for (k, v) in &host_vars {
+            resolved_vars.insert(k.clone(), v.clone()); // Host 变量覆盖
+        }
+
+        let mut patches_with_vars: Vec<Patch> = sorted_patches.into_iter().cloned().collect();
+        let mut var_warnings: Vec<String> = Vec::new();
+        for patch in &mut patches_with_vars {
+            if let Err(undefined) =
+                crate::variables::substitute_in_value(&mut patch.value, &resolved_vars)
+            {
+                for uv in undefined {
+                    let msg = format!("未定义变量 `{{{}}}` in patch [{}]", uv.name, patch.id);
+                    tracing::warn!(target = "clash_prism_extension", "{}", msg);
+                    var_warnings.push(msg);
+                }
+            }
+            for sub_op in &mut patch.sub_ops {
+                if let Err(undefined) =
+                    crate::variables::substitute_in_value(&mut sub_op.value, &resolved_vars)
+                {
+                    for uv in undefined {
+                        let msg = format!(
+                            "未定义变量 `{{{}}}` in patch [{}] sub_op",
+                            uv.name, patch.id
+                        );
+                        tracing::warn!(target = "clash_prism_extension", "{}", msg);
+                        var_warnings.push(msg);
+                    }
+                }
+            }
+        }
+
+        let sorted_refs: Vec<&Patch> = patches_with_vars.iter().collect();
+
         let mut executor = PatchExecutor::with_context(ExecutionContext {
             profile_name: self.host.get_current_profile(),
             ..ExecutionContext::default()
         });
         let config = executor
-            .execute(base_config, &sorted_patches)
+            .execute(base_config, &sorted_refs)
             .map_err(|e| format!("Patch 执行错误: {}", e))?;
 
         let traces = std::mem::take(&mut executor.traces);
-        // 收集 owned patches 用于返回（仅在缓存未命中时需要 clone）
-        let owned_patches: Vec<Patch> = sorted_patches.into_iter().cloned().collect();
+        // 收集 owned patches 用于返回
+        let owned_patches: Vec<Patch> = patches_with_vars;
         Ok((config, traces, owned_patches))
     }
 

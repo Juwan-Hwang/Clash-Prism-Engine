@@ -168,6 +168,11 @@ pub fn prism_schema() -> serde_json::Value {
                     }
                 ]
             },
+            "__vars__": {
+                "description": "File-level variable declarations for {{var_name}} template substitution.\n\nValues declared here serve as defaults. Runtime values from PrismHost::get_variables() take precedence.\n\nExample:\n  __vars__:\n    proxy: VPN07\n\n  rules:\n    $append:\n      - DOMAIN,example.com,{{proxy}}",
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+            },
 
             // ─── Common config fields (examples; actual fields determined by target kernel schema) ───
             "dns": { "$ref": "#/definitions/config_field" },

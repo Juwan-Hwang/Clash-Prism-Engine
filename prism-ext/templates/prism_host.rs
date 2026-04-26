@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 // ═══════════════════════════════════════════════════════════
 // 第一步：实现 PrismHost trait
-// 只需实现 4 个必须方法，其余 4 个可选方法有默认实现
+// 只需实现 4 个必须方法，其余 8 个可选方法有默认实现
 // ═══════════════════════════════════════════════════════════
 
 pub struct MyHost {
@@ -110,6 +110,10 @@ impl PrismHost for MyHost {
     // fn list_profiles(&self) -> Result<Vec<ProfileInfo>, String> { ... }
     // fn get_core_info(&self) -> Result<CoreInfo, String> { ... }
     // fn validate_config(&self, config: &str) -> Result<bool, String> { ... }
+    // fn script_count(&self) -> Result<usize, String> { ... }
+    // fn plugin_count(&self) -> Result<usize, String> { ... }
+    // fn get_current_profile(&self) -> Option<String> { ... }  // __when__.profile 条件匹配
+    // fn get_variables(&self) -> std::collections::HashMap<String, String> { ... }  // {{var}} 模板替换
 }
 
 // ═══════════════════════════════════════════════════════════

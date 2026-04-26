@@ -28,6 +28,7 @@
 //! | [`script_count`](PrismHost::script_count) | 返回 `Ok(0)` |
 //! | [`plugin_count`](PrismHost::plugin_count) | 返回 `Ok(0)` |
 //! | [`get_current_profile`](PrismHost::get_current_profile) | 返回 `None`（`__when__.profile` 条件匹配依赖此方法） |
+//! | [`get_variables`](PrismHost::get_variables) | 返回空映射（`{{var}}` 模板替换依赖此方法） |
 
 use std::path::PathBuf;
 
@@ -311,7 +312,7 @@ pub trait PrismHost: Send + Sync {
     /// - `event` — 要发送的事件（参见 [`PrismEvent`] 各变体）
     fn notify(&self, event: PrismEvent);
 
-    // ── 可选实现 (4 个，有默认返回 not implemented) ──
+    // ── 可选实现 (8 个，有默认实现) ──
 
     /// 读取指定 Profile 的原始 YAML
     ///
@@ -397,5 +398,15 @@ pub trait PrismHost: Send + Sync {
     /// 实现方应在此方法中 strip 后缀（或反过来），确保两端一致。
     fn get_current_profile(&self) -> Option<String> {
         None
+    }
+
+    /// 获取变量模板映射
+    ///
+    /// 返回键值对，用于 `.prism.yaml` 中 `{{var_name}}` 模板替换。
+    /// 此方法的返回值优先级最高，会覆盖 DSL 文件中 `__vars__` 声明的同名变量。
+    ///
+    /// 默认返回空映射。
+    fn get_variables(&self) -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::new()
     }
 }

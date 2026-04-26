@@ -57,6 +57,9 @@ pub trait PrismHost: Send + Sync {
 
     // Optional: override to enable __when__.profile condition matching
     fn get_current_profile(&self) -> Option<String> { None }
+
+    // Optional: override to enable {{var}} variable template substitution
+    fn get_variables(&self) -> HashMap<String, String> { HashMap::new() }
 }
 ```
 

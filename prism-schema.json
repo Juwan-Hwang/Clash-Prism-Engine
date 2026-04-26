@@ -85,6 +85,13 @@
         }
       ]
     },
+    "__vars__": {
+      "description": "文件级变量声明，用于 {{var_name}} 模板替换。\n\n此处声明的值为默认值，运行时 PrismHost::get_variables() 提供的值优先级更高。\n\n示例：\n  __vars__:\n    proxy: VPN07\n\n  rules:\n    $append:\n      - DOMAIN,example.com,{{proxy}}",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
     "dns": {
       "$ref": "#/definitions/config_field"
     },

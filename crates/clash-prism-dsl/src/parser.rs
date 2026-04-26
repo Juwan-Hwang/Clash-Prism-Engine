@@ -22,6 +22,7 @@ const OP_PREFIX: char = '$';
 /// 元数据键名
 const META_WHEN: &str = "__when__";
 const META_AFTER: &str = "__after__";
+const META_VARS: &str = "__vars__";
 
 /// All valid DSL operations (enforced at parse time).
 ///
@@ -211,6 +212,135 @@ impl DslParser {
             },
             None => Ok(vec![]),
         }
+    }
+
+    /// 提取变量声明（从 `__vars__` 元数据）
+    ///
+    /// 返回文件级变量名到默认值的映射。这些默认值在编译时作为变量模板的兜底，
+    /// 优先级低于 `PrismHost::get_variables()` 提供的运行时值。
+    fn extract_variables(
+        mapping: &serde_yml::Mapping,
+        file_path: &Option<PathBuf>,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        match mapping.get(serde_yml::Value::String(META_VARS.into())) {
+            Some(vars_val) => {
+                let vars_map = vars_val.as_mapping().ok_or_else(|| PrismError::DslParse {
+                    message: "`__vars__` must be a mapping (dict)".into(),
+                    file: file_path.clone(),
+                    line: None,
+                })?;
+
+                let mut vars = std::collections::HashMap::new();
+                for (key, val) in vars_map {
+                    let name = key.as_str().ok_or_else(|| PrismError::DslParse {
+                        message: "`__vars__` keys must be strings".into(),
+                        file: file_path.clone(),
+                        line: None,
+                    })?;
+
+                    let default_val = val.as_str().ok_or_else(|| PrismError::DslParse {
+                        message: format!(
+                            "`__vars__.{}` value must be a string, got {}",
+                            name,
+                            match val {
+                                serde_yml::Value::Number(_) => "number",
+                                serde_yml::Value::Bool(_) => "boolean",
+                                serde_yml::Value::Sequence(_) => "array",
+                                serde_yml::Value::Mapping(_) => "mapping",
+                                serde_yml::Value::Null => "null",
+                                _ => "other",
+                            }
+                        ),
+                        file: file_path.clone(),
+                        line: None,
+                    })?;
+
+                    vars.insert(name.to_string(), default_val.to_string());
+                }
+                Ok(vars)
+            }
+            None => Ok(std::collections::HashMap::new()),
+        }
+    }
+
+    /// 从字符串解析 .prism.yaml 内容，同时提取 `__vars__` 变量声明
+    ///
+    /// 返回 `(patches, file_vars)`，其中 `file_vars` 是该文件中 `__vars__` 声明的
+    /// 变量默认值映射。调用方应将这些默认值与 `PrismHost::get_variables()` 合并
+    /// 后用于模板替换。
+    pub fn parse_str_with_vars(
+        content: &str,
+        file_path: Option<PathBuf>,
+    ) -> Result<(Vec<Patch>, std::collections::HashMap<String, String>)> {
+        let value: serde_yml::Value = serde_yml::from_str(content)?;
+
+        let mapping = match value {
+            serde_yml::Value::Mapping(m) => m,
+            _ => {
+                return Err(PrismError::DslParse {
+                    message: "Prism DSL file must be a YAML mapping (dict)".into(),
+                    file: file_path.clone(),
+                    line: None,
+                });
+            }
+        };
+
+        Self::check_when_uniqueness(&mapping, &file_path)?;
+        let scope = Self::extract_scope(&mapping, &file_path)?;
+        let after_deps = Self::extract_after_dependencies(&mapping, &file_path)?;
+        let file_vars = Self::extract_variables(&mapping, &file_path)?;
+
+        let mut patches = Vec::new();
+        let mut path_groups: std::collections::BTreeMap<String, serde_yml::Mapping> =
+            std::collections::BTreeMap::new();
+
+        for (key, val) in &mapping {
+            let key_str = match key.as_str() {
+                Some(s) => s,
+                None => {
+                    tracing::warn!(
+                        target = "clash_prism_dsl",
+                        key_type = ?key,
+                        file_path = ?file_path,
+                        "YAML 键为非字符串类型，已跳过该条目"
+                    );
+                    continue;
+                }
+            };
+            if key_str.starts_with("__") && key_str.ends_with("__") {
+                continue;
+            }
+
+            if let Some(path) = Self::resolve_target_path(key_str) {
+                if let Some(inner_mapping) = val.as_mapping() {
+                    let has_dsl_op = inner_mapping
+                        .keys()
+                        .any(|k| k.as_str().map(|s| s.starts_with('$')).unwrap_or(false));
+                    if has_dsl_op {
+                        let entry = path_groups.entry(path).or_default();
+                        for (inner_key, inner_val) in inner_mapping {
+                            entry.insert(inner_key.clone(), inner_val.clone());
+                        }
+                        continue;
+                    }
+                }
+
+                path_groups
+                    .entry(path)
+                    .or_default()
+                    .insert(key.clone(), val.clone());
+            }
+        }
+
+        for (path, ops_mapping) in &path_groups {
+            let patch =
+                Self::compile_path_group(path, ops_mapping, &scope, &after_deps, &file_path)?;
+            if let Some(p) = patch {
+                patches.push(p);
+            }
+        }
+
+        Ok((patches, file_vars))
     }
 
     /// 解析目标路径：$ 操作符的父级键即为目标路径

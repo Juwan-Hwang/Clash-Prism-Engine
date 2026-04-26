@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **PrismHost::get_current_profile()** — 新增默认方法，返回当前激活的 Profile 名称（默认 `None`），GUI 接入方可覆盖此方法以启用 `__when__.profile` 条件匹配
 
+- **变量模板系统 (`__vars__` + `{{var}}`)** — DSL 文件支持 `__vars__` 声明文件级变量默认值，Patch 中使用 `{{var_name}}` 或 `{{var_name|default}}` 模板占位符，运行时由 `PrismHost::get_variables()` 注入实际值。优先级：Host 变量 > `__vars__` 文件默认值 > 内联默认值。解决了规则文件跨订阅复用时 proxy group 名称硬编码的问题
+
 ## [0.1.2] - 2026-04-21
 
 ### Performance
