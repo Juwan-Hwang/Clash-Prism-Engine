@@ -18,6 +18,7 @@
 //! 3. [`group_annotations`] 将注解按 `source_file` 归组，生成 [`RuleGroup`] 列表
 //! 4. GUI 前端展示规则组，用户可启用/禁用整个组
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::types::RuleAnnotation;
@@ -63,6 +64,11 @@ pub fn extract_rule_annotations(
         None => return annotations,
     };
 
+    // 预构建规则索引：O(R) 一次遍历，后续查找 O(1)
+    // 索引中每个 key 对应的 Vec<usize> 天然按升序排列，
+    // 取 last() 即等价于 rposition（返回最后一个匹配位置）
+    let index = build_rule_index(rules_array);
+
     // 为每个 prepend/append 操作生成注解
     // NOTE: 当前仅处理 prepend 和 append 操作。未来如需支持其他操作类型
     // （如 insert、replace 等），应将此判断提取为可配置的策略方法，
@@ -103,7 +109,7 @@ pub fn extract_rule_annotations(
                 } else {
                     None
                 };
-                if let Some(index) = find_rule_index(rules_array, rule_text, &pre_parsed) {
+                if let Some(index) = find_by_index(&index, rule_text, &pre_parsed) {
                     annotations.push(RuleAnnotation {
                         rule_text: rule_text.clone(),
                         index_in_output: index,
@@ -122,7 +128,7 @@ pub fn extract_rule_annotations(
                     } else {
                         None
                     };
-                    if let Some(index) = find_rule_index(rules_array, rule_text, &pre_parsed) {
+                    if let Some(index) = find_by_index(&index, rule_text, &pre_parsed) {
                         annotations.push(RuleAnnotation {
                             rule_text: rule_text.clone(),
                             index_in_output: index,
@@ -142,6 +148,54 @@ pub fn extract_rule_annotations(
     annotations
 }
 
+/// 规则索引，将 O(n²) 的线性查找降为 O(n)
+struct RuleIndex<'a> {
+    /// 字符串规则文本 → 所有出现位置的索引列表（升序）
+    string_positions: HashMap<&'a str, Vec<usize>>,
+    /// 对象规则的 JSON 序列化 → 所有出现位置的索引列表（升序）
+    object_positions: HashMap<String, Vec<usize>>,
+}
+
+/// 预构建规则索引：O(R) 一次遍历
+fn build_rule_index(rules: &[serde_json::Value]) -> RuleIndex<'_> {
+    let mut string_positions: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut object_positions: HashMap<String, Vec<usize>> = HashMap::new();
+
+    for (idx, rule) in rules.iter().enumerate() {
+        if let Some(s) = rule.as_str() {
+            string_positions.entry(s).or_default().push(idx);
+        } else {
+            // 对象格式规则：用 JSON 序列化作为 key
+            let key = serde_json::to_string(rule).unwrap_or_default();
+            object_positions.entry(key).or_default().push(idx);
+        }
+    }
+
+    RuleIndex {
+        string_positions,
+        object_positions,
+    }
+}
+
+/// O(1) 索引查找，取 last() 等价于 rposition
+fn find_by_index<'a>(
+    index: &RuleIndex<'a>,
+    rule_text: &'a str,
+    pre_parsed: &Option<serde_json::Value>,
+) -> Option<usize> {
+    if let Some(positions) = index.string_positions.get(rule_text) {
+        return positions.last().copied();
+    }
+    if let Some(parsed) = pre_parsed {
+        let key = serde_json::to_string(parsed).ok()?;
+        if let Some(positions) = index.object_positions.get(&key) {
+            return positions.last().copied();
+        }
+    }
+    None
+}
+
+#[cfg(test)]
 /// 查找规则在输出数组中的索引。
 ///
 /// ## 设计决策：rposition 策略
