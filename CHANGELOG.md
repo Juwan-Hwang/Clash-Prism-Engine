@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **bulk_items 摘要模式** — append/prepend 操作 ≥ 100 条时，`affected_items` 仅保留一条摘要，完整 item 描述存入 `Arc<[String]>` 共享字段，避免 `last_traces` clone 时的深拷贝开销。`extract_rule_annotations()` 自动适配两种模式
+
 ### Fixed
 
 - **profile_name 未注入 ExecutionContext** — `compile_pipeline` 中创建 `PatchExecutor` 时未设置 `context.profile_name`，导致 `__when__.profile` 条件匹配始终失败（所有带 profile 条件的 Patch 被静默跳过）；改为通过 `PatchExecutor::with_context()` 从 `PrismHost::get_current_profile()` 获取并注入

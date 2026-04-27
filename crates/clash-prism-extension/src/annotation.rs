@@ -95,9 +95,9 @@ pub fn extract_rule_annotations(
         let source_patch = trace.patch_id.as_str().to_string();
 
         // 遍历 affected_items 中的 Added 条目
-        for item in &trace.affected_items {
-            if let Some(rule_text) = &item.after {
-                // 预解析对象格式规则（只解析一次，避免内层 R 次重复解析）
+        // 当 bulk_items 存在时（大批量摘要模式），从 bulk_items 获取完整描述列表
+        if let Some(bulk) = &trace.bulk_items {
+            for rule_text in bulk.iter() {
                 let pre_parsed = if rule_text.starts_with('{') {
                     serde_json::from_str::<serde_json::Value>(rule_text).ok()
                 } else {
@@ -112,6 +112,26 @@ pub fn extract_rule_annotations(
                         source_label: source_label.clone(),
                         immutable: false,
                     });
+                }
+            }
+        } else {
+            for item in &trace.affected_items {
+                if let Some(rule_text) = &item.after {
+                    let pre_parsed = if rule_text.starts_with('{') {
+                        serde_json::from_str::<serde_json::Value>(rule_text).ok()
+                    } else {
+                        None
+                    };
+                    if let Some(index) = find_rule_index(rules_array, rule_text, &pre_parsed) {
+                        annotations.push(RuleAnnotation {
+                            rule_text: rule_text.clone(),
+                            index_in_output: index,
+                            source_file: source_file.clone(),
+                            source_patch: source_patch.clone(),
+                            source_label: source_label.clone(),
+                            immutable: false,
+                        });
+                    }
                 }
             }
         }

@@ -13,6 +13,8 @@
 //! - **AffectedItem**: Individual element change records (added/removed/modified)
 //! - **ExplainEntry**: Source query result for "Why is this rule here?" (§3.2)
 
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use crate::ir::{Patch, PatchId, PatchOp};
@@ -557,6 +559,13 @@ pub struct ExecutionTrace {
 
     /// List of affected elements (only changed ones, not unchanged)
     pub affected_items: Vec<AffectedItem>,
+
+    /// 大批量操作时的完整 item 描述列表（仅 append/prepend ≥ 100 条时填充）
+    ///
+    /// 使用 `Arc<[String]>` 避免 `last_traces` clone 时的深拷贝开销。
+    /// 不参与序列化（仅内部使用）。
+    #[serde(skip)]
+    pub bulk_items: Option<Arc<[String]>>,
 }
 
 impl ExecutionTrace {
@@ -578,6 +587,31 @@ impl ExecutionTrace {
             condition_matched,
             summary,
             affected_items,
+            bulk_items: None,
+        }
+    }
+
+    /// 创建带 bulk_items 的执行追踪（大批量 append/prepend 使用）
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_bulk_items(
+        patch_id: PatchId,
+        source: PatchSource,
+        op: PatchOp,
+        duration_us: u64,
+        condition_matched: bool,
+        summary: TraceSummary,
+        affected_items: Vec<AffectedItem>,
+        bulk_items: Arc<[String]>,
+    ) -> Self {
+        Self {
+            patch_id,
+            source,
+            op,
+            duration_us,
+            condition_matched,
+            summary,
+            affected_items,
+            bulk_items: Some(bulk_items),
         }
     }
 

@@ -609,6 +609,11 @@ pub struct ExecutionTrace {
 
     /// 受影响的元素列表（只记录被增删改的，不记录未受影响的）
     pub affected_items: Vec<AffectedItem>,
+
+    /// 大批量操作时的完整 item 描述列表（仅 append/prepend ≥ 100 条时填充）
+    /// 使用 `Arc<[String]>` 避免 `last_traces` clone 时的深拷贝开销
+    #[serde(skip)]
+    pub bulk_items: Option<Arc<[String]>>,
 }
 
 /// 执行摘要
@@ -1348,7 +1353,7 @@ Runtime 最后执行 → 它的值覆盖所有之前的设置。
 
 | 组件 | 说明 | 代码位置 |
 |------|------|---------|
-| `ExecutionTrace` | 单个 Patch 的执行记录（patch_id, source, op, duration, condition_matched, summary, affected_items） | `trace.rs` |
+| `ExecutionTrace` | 单个 Patch 的执行记录（patch_id, source, op, duration, condition_matched, summary, affected_items, bulk_items） | `trace.rs` |
 | `TraceSummary` | 操作统计（added, removed, modified, kept, total_before, total_after） | `trace.rs` |
 | `AffectedItem` | 受影响的单个元素（index, before, after, action） | `trace.rs` |
 | `TraceManager::explain_field()` | 溯源查询：哪些 Patch 修改了指定字段 | `trace.rs` |

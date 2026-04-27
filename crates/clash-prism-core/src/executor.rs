@@ -75,6 +75,25 @@ pub fn is_guarded_path(path: &str) -> bool {
 // Uses IndexMap for insertion-order tracking, enabling LRU eviction.
 const MAX_REGEX_CACHE_SIZE: usize = 512;
 
+/// 单次 append/prepend 操作超过此阈值时，启用摘要模式（不逐条创建 AffectedItem）
+const TRACE_SUMMARY_THRESHOLD: usize = 100;
+
+/// 从 JSON 值中提取人类可读描述（用于 trace）
+///
+/// - 字符串元素（如 rules 数组）：直接使用字符串值
+/// - 对象元素（如 proxies 数组）：使用 "name" 字段
+/// - 兜底：JSON 序列化整个值
+fn extract_item_description(item: &serde_json::Value) -> String {
+    item.as_str()
+        .map(|s| s.to_string())
+        .or_else(|| {
+            item.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| serde_json::to_string(item).unwrap_or_else(|_| "$item".to_string()))
+}
+
 thread_local! {
     /// Thread-local regex cache for the executor.
     ///
@@ -713,41 +732,58 @@ impl PatchExecutor {
         // - String elements (rules array): use the string value directly
         // - Object elements (proxies array): use the "name" field
         // - Fallback: JSON-serialize the entire value
-        let affected: Vec<AffectedItem> = new_items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let desc = item
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        item.get("name")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| {
-                        serde_json::to_string(item).unwrap_or_else(|_| "$item".to_string())
-                    });
-                AffectedItem::added(i, desc)
-            })
-            .collect();
+        //
+        // 大批量时启用摘要模式：只生成一条摘要 AffectedItem，
+        // 完整描述存入 bulk_items（Arc 共享，clone 开销 O(1)）
+        let (affected, bulk_items) = if new_items.len() >= TRACE_SUMMARY_THRESHOLD {
+            let descs: Arc<[String]> = new_items.iter().map(extract_item_description).collect();
+            let summary_item = AffectedItem::added(0, format!("{} items prepended", descs.len()));
+            (vec![summary_item], Some(descs))
+        } else {
+            let items: Vec<AffectedItem> = new_items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| AffectedItem::added(i, extract_item_description(item)))
+                .collect();
+            (items, None)
+        };
 
-        let trace = ExecutionTrace::new(
-            patch.id.clone(),
-            patch.source.clone(),
-            patch.op.clone(),
-            0,
-            true,
-            TraceSummary::new(
-                actually_prepend,
+        let trace = if let Some(bulk) = bulk_items {
+            ExecutionTrace::with_bulk_items(
+                patch.id.clone(),
+                patch.source.clone(),
+                patch.op.clone(),
                 0,
+                true,
+                TraceSummary::new(
+                    actually_prepend,
+                    0,
+                    0,
+                    original_len,
+                    original_len,
+                    original_len + actually_prepend,
+                ),
+                affected,
+                bulk,
+            )
+        } else {
+            ExecutionTrace::new(
+                patch.id.clone(),
+                patch.source.clone(),
+                patch.op.clone(),
                 0,
-                original_len,
-                original_len,
-                original_len + actually_prepend,
-            ),
-            affected,
-        );
+                true,
+                TraceSummary::new(
+                    actually_prepend,
+                    0,
+                    0,
+                    original_len,
+                    original_len,
+                    original_len + actually_prepend,
+                ),
+                affected,
+            )
+        };
 
         Ok(trace)
     }
@@ -784,41 +820,64 @@ impl PatchExecutor {
             serde_json::Value::Array(arr) => arr.iter().collect(),
             single => vec![single],
         };
-        let affected: Vec<AffectedItem> = new_items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let desc = item
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        item.get("name")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| {
-                        serde_json::to_string(item).unwrap_or_else(|_| "$item".to_string())
-                    });
-                AffectedItem::added(original_len + i, desc)
-            })
-            .collect();
 
-        let trace = ExecutionTrace::new(
-            patch.id.clone(),
-            patch.source.clone(),
-            patch.op.clone(),
-            0,
-            true,
-            TraceSummary::new(
-                actually_append,
+        // 大批量时启用摘要模式：只生成一条摘要 AffectedItem，
+        // 完整描述存入 bulk_items（Arc 共享，clone 开销 O(1)）
+        let (affected, bulk_items) = if new_items.len() >= TRACE_SUMMARY_THRESHOLD {
+            let descs: Arc<[String]> = new_items
+                .iter()
+                .map(|item| extract_item_description(item))
+                .collect();
+            let summary_item =
+                AffectedItem::added(original_len, format!("{} items appended", descs.len()));
+            (vec![summary_item], Some(descs))
+        } else {
+            let items: Vec<AffectedItem> = new_items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    AffectedItem::added(original_len + i, extract_item_description(item))
+                })
+                .collect();
+            (items, None)
+        };
+
+        let trace = if let Some(bulk) = bulk_items {
+            ExecutionTrace::with_bulk_items(
+                patch.id.clone(),
+                patch.source.clone(),
+                patch.op.clone(),
                 0,
+                true,
+                TraceSummary::new(
+                    actually_append,
+                    0,
+                    0,
+                    original_len,
+                    original_len,
+                    original_len + actually_append,
+                ),
+                affected,
+                bulk,
+            )
+        } else {
+            ExecutionTrace::new(
+                patch.id.clone(),
+                patch.source.clone(),
+                patch.op.clone(),
                 0,
-                original_len,
-                original_len,
-                original_len + actually_append,
-            ),
-            affected,
-        );
+                true,
+                TraceSummary::new(
+                    actually_append,
+                    0,
+                    0,
+                    original_len,
+                    original_len,
+                    original_len + actually_append,
+                ),
+                affected,
+            )
+        };
 
         Ok(trace)
     }
