@@ -31,8 +31,8 @@ pub enum Scope {
 
     /// Conditional scope — applies only when conditions are met
     Scoped {
-        /// Profile name or regex
-        profile: Option<String>,
+        /// Profile names or regex patterns (supports multiple, any match passes)
+        profile: Option<Vec<String>>,
         /// Operating system platform
         platform: Option<Vec<Platform>>,
         /// Proxy core type
@@ -113,7 +113,7 @@ impl std::fmt::Display for Scope {
                 write!(f, "Scoped(")?;
                 let mut parts = vec![];
                 if let Some(p) = profile {
-                    parts.push(format!("profile={}", p));
+                    parts.push(format!("profile=[{}]", p.join(", ")));
                 }
                 if let Some(p) = platform {
                     parts.push(format!(
@@ -173,7 +173,7 @@ impl std::fmt::Display for Platform {
 
 /// Builder for constructing [`Scope::Scoped`] conditions.
 pub struct ScopedBuilder {
-    profile: Option<String>,
+    profile: Option<Vec<String>>,
     platform: Option<Vec<Platform>>,
     core: Option<String>,
     time_range: Option<TimeRange>,
@@ -200,9 +200,15 @@ impl ScopedBuilder {
         }
     }
 
-    /// Set the profile name condition.
+    /// Set the profile condition (supports single string or multiple via Vec).
     pub fn profile(mut self, profile: impl Into<String>) -> Self {
-        self.profile = Some(profile.into());
+        self.profile = Some(vec![profile.into()]);
+        self
+    }
+
+    /// Set multiple profile conditions (any match passes).
+    pub fn profiles(mut self, profiles: Vec<String>) -> Self {
+        self.profile = Some(profiles);
         self
     }
 
@@ -474,7 +480,7 @@ mod tests {
         let display = format!("{}", scope);
         assert!(display.starts_with("Scoped("));
         assert!(display.contains("core=clash"));
-        assert!(display.contains("profile=home"));
+        assert!(display.contains("profile=[home]"));
         assert!(display.contains("platform=[macos]"));
     }
 
@@ -501,7 +507,7 @@ mod tests {
                 enabled,
                 ssid,
             } => {
-                assert_eq!(profile.as_deref(), Some("work"));
+                assert_eq!(profile.as_deref(), Some(&["work".to_string()][..]));
                 assert_eq!(platform.as_deref().map(|v| v.len()), Some(2));
                 assert!(platform.as_ref().unwrap().contains(&Platform::MacOS));
                 assert!(platform.as_ref().unwrap().contains(&Platform::Linux));
@@ -841,7 +847,7 @@ mod tests {
                 enabled,
                 ssid,
             } => {
-                assert_eq!(profile.as_deref(), Some("work"));
+                assert_eq!(profile.as_deref(), Some(&["work".to_string()][..]));
                 assert_eq!(platform.as_ref().map(|v| v.len()), Some(2));
                 assert_eq!(core.as_deref(), Some("mihomo"));
                 assert_eq!(time_range.as_ref().unwrap().start, (8, 0));

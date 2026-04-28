@@ -653,10 +653,20 @@ impl ConditionPrecompiler {
             builder = builder.platform(platforms);
         }
 
-        if let Some(profile) = when.get(serde_yml::Value::String("profile".into()))
-            && let Some(profile_str) = profile.as_str()
-        {
-            builder = builder.profile(profile_str);
+        if let Some(profile) = when.get(serde_yml::Value::String("profile".into())) {
+            let profiles = match profile {
+                serde_yml::Value::String(s) => vec![s.as_str().to_string()],
+                serde_yml::Value::Sequence(seq) => seq
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+                _ => {
+                    return Err(CompileError::ConditionPrecompile(
+                        "profile 字段类型错误，应为字符串或字符串数组".into(),
+                    ));
+                }
+            };
+            builder = builder.profiles(profiles);
         }
 
         // Parse time condition
@@ -1247,7 +1257,29 @@ mod tests {
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
             crate::scope::Scope::Scoped { profile, .. } => {
-                assert_eq!(profile.as_deref(), Some("work"));
+                assert_eq!(profile.as_deref(), Some(&["work".to_string()][..]));
+            }
+            _ => panic!("Expected Scoped scope"),
+        }
+    }
+
+    #[test]
+    fn test_compile_when_profile_array() {
+        let mut when = serde_yml::Mapping::new();
+        when.insert(
+            serde_yml::Value::String("profile".into()),
+            serde_yml::Value::Sequence(vec![
+                serde_yml::Value::String("config".into()),
+                serde_yml::Value::String("subscribe".into()),
+            ]),
+        );
+        let scope = ConditionPrecompiler::compile_when(&when).unwrap();
+        match scope {
+            crate::scope::Scope::Scoped { profile, .. } => {
+                assert_eq!(
+                    profile.as_deref(),
+                    Some(&["config".to_string(), "subscribe".to_string()][..])
+                );
             }
             _ => panic!("Expected Scoped scope"),
         }

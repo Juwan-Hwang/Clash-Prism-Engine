@@ -139,8 +139,14 @@ pub fn prism_schema() -> serde_json::Value {
                         ]
                     },
                     "profile": {
-                        "description": "Profile name (supports regex matching)\n\nSyntax: JavaScript-style regular expressions wrapped in slashes.\nExamples:\n  - \"/streaming|unlock/\" — matches profiles containing 'streaming' or 'unlock'\n  - \"/^prod-/\" — matches profiles starting with 'prod-'\n  - \"/test$/\" — matches profiles ending with 'test'\n\nNote: Regex matching is executed at runtime by the engine.",
-                        "type": "string"
+                        "description": "Profile name or names (supports regex matching)\n\nSyntax: JavaScript-style regular expressions wrapped in slashes.\nExamples:\n  - \"/streaming|unlock/\" — matches profiles containing 'streaming' or 'unlock'\n  - \"/^prod-/\" — matches profiles starting with 'prod-'\n  - [\"config\", \"subscribe\"] — matches either 'config' or 'subscribe'\n\nNote: Regex matching is executed at runtime by the engine.",
+                        "oneOf": [
+                            { "type": "string" },
+                            {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        ]
                     },
                     "time": {
                         "description": "Time range (optional)",

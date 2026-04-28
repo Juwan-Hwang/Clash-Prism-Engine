@@ -1601,14 +1601,17 @@ pub fn check_patch_condition(patch: &Patch, context: &ExecutionContext) -> bool 
                     return false;
                 }
             }
-            if let Some(scope_profile) = profile
-                && let Some(ctx_profile) = &context.profile_name
-            {
-                return PatchExecutor::profile_matches(ctx_profile, scope_profile);
-            }
-            // scope 声明了 profile 条件但 context 未指定 profile → 不执行
-            if profile.is_some() && context.profile_name.is_none() {
-                return false;
+            if let Some(scope_profiles) = profile {
+                if let Some(ctx_profile) = &context.profile_name {
+                    let matched = scope_profiles
+                        .iter()
+                        .any(|sp| PatchExecutor::profile_matches(ctx_profile, sp));
+                    if !matched {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
             }
             true
         }

@@ -50,8 +50,14 @@
           ]
         },
         "profile": {
-          "description": "Profile 名称（支持正则匹配）\n示例: \"/流媒体|解锁/\" 匹配包含「流媒体」或「解锁」的 Profile",
-          "type": "string"
+          "description": "Profile 名称（支持正则匹配，支持字符串或字符串数组）\n示例: \"/流媒体|解锁/\" 匹配包含「流媒体」或「解锁」的 Profile\n数组示例: [\"config\", \"subscribe\"] 匹配任一 Profile",
+          "oneOf": [
+            { "type": "string" },
+            {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          ]
         },
         "time": {
           "description": "时间段（可选，格式: HH:mm-HH:mm）\n示例: \"08:00-23:00\"",
