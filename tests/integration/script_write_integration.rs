@@ -54,8 +54,8 @@ fn integration_script_patch_pipeline() {
     let modified_config = script_result.modified_config.expect("Should have modified config");
     
     // Step 2: 验证修改后的配置可以被序列化和反序列化
-    let config_yaml = serde_yaml::to_string(&modified_config).expect("Should serialize to YAML");
-    let reparsed: serde_json::Value = serde_yaml::from_str(&config_yaml).expect("Should parse back from YAML");
+    let config_yaml = serde_yml::to_string(&modified_config).expect("Should serialize to YAML");
+    let reparsed: serde_json::Value = serde_yml::from_str(&config_yaml).expect("Should parse back from YAML");
     
     assert_eq!(reparsed["port"], 9090);
     assert_eq!(reparsed["dns"]["enable"], true);
@@ -154,31 +154,32 @@ fn integration_script_error_isolation() {
     let result1 = runtime.execute_with_write(script1, "ok-script", &base_config);
     assert!(result1.success);
     assert!(result1.config_modified);
-    
+    let config_after_script1 = result1.modified_config.expect("Script 1 should return modified config");
+
     // 脚本 2: 抛出错误
     let script2 = r#"
         function main(config) {
             throw new Error('Intentional error');
         }
     "#;
-    
-    let result2 = runtime.execute_with_write(script2, "error-script", &result1.modified_config.unwrap());
-    // 错误被 wrapper 捕获，执行成功但配置未修改
-    assert!(result2.success);
+
+    let result2 = runtime.execute_with_write(script2, "error-script", &config_after_script1);
+    // 新实现：脚本抛出异常会导致执行失败
+    assert!(!result2.success);
     assert!(!result2.config_modified);
-    
-    // 脚本 3: 应该能继续正常执行
+
+    // 脚本 3: 应该能继续正常执行（使用 script 1 的结果）
     let script3 = r#"
         function main(config) {
             config.port = 9999;
             return config;
         }
     "#;
-    
-    let result3 = runtime.execute_with_write(script3, "recovery-script", &result1.modified_config.unwrap());
+
+    let result3 = runtime.execute_with_write(script3, "recovery-script", &config_after_script1);
     assert!(result3.success);
     assert!(result3.config_modified);
-    assert_eq!(result3.modified_config.unwrap()["port"], 9999);
+    assert_eq!(result3.modified_config.expect("Script 3 should return config")["port"], 9999);
 }
 
 /// 集成测试：复杂真实场景 - 代理分组和规则处理
