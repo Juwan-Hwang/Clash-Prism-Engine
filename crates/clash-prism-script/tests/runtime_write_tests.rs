@@ -129,7 +129,7 @@ fn test_extract_modified_config_success() {
     assert_eq!(modified["port"], 9999, "Port should be modified to 9999");
 }
 
-/// 测试从日志中提取修改后的配置 - 脚本未定义 main 函数
+/// 测试脚本未定义 main 函数 - 应该执行失败
 #[test]
 fn test_extract_modified_config_no_main() {
     let runtime = create_test_runtime();
@@ -142,29 +142,24 @@ fn test_extract_modified_config_no_main() {
 
     let result = runtime.execute_with_write(script, "test-no-main", &config);
 
+    // 新实现：缺少 main 函数会导致执行失败
     assert!(
-        result.success,
-        "Script execution should succeed (wrapper handles error): {:?}",
+        !result.success,
+        "Script without main() should fail: {:?}",
         result.error
     );
     assert!(
-        !result.config_modified,
-        "Config should NOT be marked as modified"
+        result
+            .error
+            .as_ref()
+            .map(|e| e.contains("main"))
+            .unwrap_or(false),
+        "Error should mention main: {:?}",
+        result.error
     );
-    assert!(
-        result.modified_config.is_none(),
-        "Modified config should be None"
-    );
-
-    // 检查错误日志
-    let has_error = result
-        .logs
-        .iter()
-        .any(|log| log.level == LogLevel::Error && log.message.contains("main(config) function"));
-    assert!(has_error, "Should have error about missing main function");
 }
 
-/// 测试从日志中提取修改后的配置 - main 返回非对象
+/// 测试 main 返回非对象 - 应该执行失败
 #[test]
 fn test_extract_modified_config_invalid_return() {
     let runtime = create_test_runtime();
@@ -177,28 +172,24 @@ fn test_extract_modified_config_invalid_return() {
 
     let result = runtime.execute_with_write(script, "test-invalid-return", &config);
 
+    // 新实现：返回非对象会导致执行失败
     assert!(
-        result.success,
-        "Script execution should succeed (wrapper handles error)"
+        !result.success,
+        "Script returning non-object should fail: {:?}",
+        result.error
     );
     assert!(
-        !result.config_modified,
-        "Config should NOT be marked as modified"
+        result
+            .error
+            .as_ref()
+            .map(|e| e.contains("config object"))
+            .unwrap_or(false),
+        "Error should mention config object: {:?}",
+        result.error
     );
-    assert!(
-        result.modified_config.is_none(),
-        "Modified config should be None"
-    );
-
-    // 检查错误日志
-    let has_error = result
-        .logs
-        .iter()
-        .any(|log| log.level == LogLevel::Error && log.message.contains("config object"));
-    assert!(has_error, "Should have error about invalid return type");
 }
 
-/// 测试从日志中提取修改后的配置 - main 返回 null
+/// 测试 main 返回 null - 应该执行失败
 #[test]
 fn test_extract_modified_config_return_null() {
     let runtime = create_test_runtime();
@@ -211,17 +202,11 @@ fn test_extract_modified_config_return_null() {
 
     let result = runtime.execute_with_write(script, "test-return-null", &config);
 
+    // 新实现：返回 null 会导致执行失败
     assert!(
-        result.success,
-        "Script execution should succeed (wrapper handles error)"
-    );
-    assert!(
-        !result.config_modified,
-        "Config should NOT be marked as modified"
-    );
-    assert!(
-        result.modified_config.is_none(),
-        "Modified config should be None"
+        !result.success,
+        "Script returning null should fail: {:?}",
+        result.error
     );
 }
 
@@ -430,18 +415,14 @@ fn integration_script_throws_exception() {
 
     let result = runtime.execute_with_write(script, "integration-exception", &config);
 
-    // 脚本执行应该成功（wrapper 捕获了异常）
-    assert!(result.success);
-    // 但配置不应该被修改
+    // 新实现：脚本抛出异常会导致执行失败
+    assert!(
+        !result.success,
+        "Script throwing exception should fail: {:?}",
+        result.error
+    );
     assert!(!result.config_modified);
     assert!(result.modified_config.is_none());
-
-    // 应该记录错误日志
-    let has_error = result
-        .logs
-        .iter()
-        .any(|log| log.level == LogLevel::Error && log.message.contains("execution failed"));
-    assert!(has_error, "Should log execution error");
 }
 
 /// 集成测试：访问未定义变量
@@ -458,11 +439,13 @@ fn integration_undefined_variable_access() {
 
     let result = runtime.execute_with_write(script, "integration-undefined-var", &config);
 
-    assert!(result.success); // Wrapper catches the error
+    // 新实现：访问未定义变量会导致执行失败
+    assert!(
+        !result.success,
+        "Script with undefined variable should fail: {:?}",
+        result.error
+    );
     assert!(!result.config_modified);
-
-    let has_error = result.logs.iter().any(|log| log.level == LogLevel::Error);
-    assert!(has_error, "Should have error log");
 }
 
 // ═══════════════════════════════════════════════════════════

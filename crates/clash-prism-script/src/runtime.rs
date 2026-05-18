@@ -29,9 +29,6 @@ use crate::sandbox::SandboxConfig;
 /// 防止脚本返回过大的配置导致内存问题
 const MAX_MODIFIED_CONFIG_BYTES: usize = 10 * 1024 * 1024;
 
-/// 内部使用的配置返回日志前缀
-const CONFIG_RETURN_PREFIX: &str = "__PRISM_MODIFIED_CONFIG__";
-
 /// 脚本执行结果
 #[derive(Debug)]
 pub struct ScriptResult {
@@ -726,127 +723,314 @@ impl ScriptRuntime {
         script_name: &str,
         config: &serde_json::Value,
     ) -> WriteScriptResult {
-        // 包装用户脚本以捕获返回的配置
-        // 使用 config.get('') 获取完整配置对象，传递给用户的 main 函数
-        let wrapped_script = format!(
-            r"
-{script}
+        // 使用与 execute() 相同的执行流程，但修改 wrapper 来返回配置
+        // 配置通过 JS 返回值直接传递，不受日志系统的 10KB 限制
 
-// Prism write-back wrapper: capture and validate returned config
-if (typeof main !== 'function') {{
-    log.error('Script must define a main(config) function for write-back mode');
-}} else {{
-    try {{
-        // 获取完整配置对象 (空字符串获取整个配置)
-        var __config_obj = config.get('');
-        // 调用用户的 main 函数
-        var __prism_result = main(__config_obj);
-        if (__prism_result === null || typeof __prism_result !== 'object') {{
-            log.error('main() must return a config object, got: ' + typeof __prism_result);
-        }} else {{
-            // 将修改后的配置序列化并通过特殊日志前缀传递给 Rust
-            log.info('__PRISM_MODIFIED_CONFIG__' + JSON.stringify(__prism_result));
-        }}
-    }} catch (e) {{
-        log.error('main() execution failed: ' + String(e.stack || e.message || e));
-    }}
-}}
-"
-        );
+        let start = std::time::Instant::now();
 
-        // 使用现有的 execute 方法执行包装后的脚本
-        // 对于 write-back 模式，我们需要更大的输出限制来容纳配置
-        let result = self.execute(&wrapped_script, script_name, config);
-
-        // 从日志中提取修改后的配置（反向遍历，优先使用最后一条匹配的记录）
-        // 反向遍历可以防止用户脚本通过提前输出相同前缀来欺骗系统
-        let modified_config = Self::extract_modified_config_from_logs(&result.logs);
-
-        // 验证修改后的配置大小
-        if let Some(ref config) = modified_config {
-            let config_size = serde_json::to_string(config).map(|s| s.len()).unwrap_or(0);
-            if config_size > MAX_MODIFIED_CONFIG_BYTES {
+        // 复用 execute() 的运行时创建逻辑
+        let rt = match rquickjs::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
                 return WriteScriptResult {
-                    logs: result.logs,
-                    duration_us: result.duration_us,
+                    logs: vec![],
+                    duration_us: 0,
                     success: false,
-                    error: Some(format!(
-                        "Modified config too large: {} bytes (max {})",
-                        config_size, MAX_MODIFIED_CONFIG_BYTES
-                    )),
-                    patches: result.patches,
+                    error: Some(format!("无法创建 JS 运行时: {}", e)),
+                    patches: vec![],
                     modified_config: None,
                     config_modified: false,
                 };
             }
-        }
+        };
 
-        // 判断配置是否被修改
-        let config_modified = modified_config.is_some();
+        rt.set_memory_limit(self.limits.max_memory_bytes);
 
-        // 过滤掉内部使用的特殊日志前缀
-        let filtered_logs: Vec<LogEntry> = result
-            .logs
-            .into_iter()
-            .filter(|log| !log.message.starts_with(CONFIG_RETURN_PREFIX))
-            .collect();
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let timeout_flag = Arc::clone(&timed_out);
+        let timeout_ms = self.limits.max_execution_time_ms;
 
-        WriteScriptResult {
-            logs: filtered_logs,
-            duration_us: result.duration_us,
-            success: result.success,
-            error: result.error,
-            patches: result.patches,
-            modified_config,
-            config_modified,
-        }
-    }
+        let step_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let max_steps = self.limits.max_loop_iterations;
+        let step_counter_clone = Arc::clone(&step_counter);
+        let max_recursion = self.limits.max_recursion_depth;
+        let recursion_depth_clone = Arc::clone(&self.recursion_depth);
+        let step_limit_flag = Arc::clone(&self.step_limit_hit);
+        let recursion_limit_flag = Arc::clone(&self.recursion_limit_hit);
 
-    /// 从日志中提取修改后的配置
-    ///
-    /// ## 安全考虑
-    ///
-    /// 使用反向遍历（`iter().rev()`）来防止用户脚本欺骗：
-    /// - 用户脚本可能提前输出 `__PRISM_MODIFIED_CONFIG__` 前缀来伪造配置
-    /// - 反向遍历确保我们优先使用 wrapper 脚本最后生成的配置记录
-    fn extract_modified_config_from_logs(logs: &[LogEntry]) -> Option<serde_json::Value> {
-        // 反向遍历日志，优先使用最后一条匹配的记录
-        // 这可以防止用户脚本通过提前输出相同前缀来欺骗系统
-        for log in logs.iter().rev() {
-            if let Some(json_str) = log.message.strip_prefix(CONFIG_RETURN_PREFIX) {
-                // 检查配置大小（在解析前进行初步检查）
-                if json_str.len() > MAX_MODIFIED_CONFIG_BYTES {
-                    tracing::warn!(
-                        target = "clash_prism_script",
-                        size = json_str.len(),
-                        max = MAX_MODIFIED_CONFIG_BYTES,
-                        "Modified config JSON exceeds size limit, ignoring"
-                    );
-                    return None;
+        let handler: Box<dyn FnMut() -> bool + Send> = Box::new(move || {
+            if timeout_flag.load(Ordering::Acquire) {
+                return true;
+            }
+            let steps = step_counter_clone.fetch_add(1, Ordering::Relaxed);
+            if steps > max_steps {
+                step_limit_flag.store(true, Ordering::Release);
+                return true;
+            }
+            if recursion_depth_clone.load(Ordering::Relaxed) > max_recursion {
+                recursion_limit_flag.store(true, Ordering::Release);
+                return true;
+            }
+            false
+        });
+        rt.set_interrupt_handler(Some(handler));
+
+        let timeout_handle = {
+            let flag = Arc::clone(&timed_out);
+            std::thread::spawn(move || {
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+                loop {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    std::thread::park_timeout(remaining);
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    if flag.load(Ordering::Acquire) {
+                        return;
+                    }
+                }
+                flag.store(true, Ordering::Release);
+            })
+        };
+
+        let ctx = match rquickjs::Context::full(&rt) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                timed_out.store(true, Ordering::Release);
+                timeout_handle.thread().unpark();
+                let _ = timeout_handle.join();
+                return WriteScriptResult {
+                    logs: vec![],
+                    duration_us: 0,
+                    success: false,
+                    error: Some(format!("无法创建 JS 上下文: {}", e)),
+                    patches: vec![],
+                    modified_config: None,
+                    config_modified: false,
+                };
+            }
+        };
+
+        let script_logs: Arc<Mutex<Vec<LogEntry>>> = Arc::new(Mutex::new(Vec::with_capacity(64)));
+        let logs_for_api = Arc::clone(&script_logs);
+        let collector = Arc::new(PatchCollector::new());
+        let shared_config = Arc::new(Mutex::new(config.clone()));
+
+        let result = ctx.with(|ctx| {
+            // 注册 API
+            if let Err(e) = crate::api::PrismApi::register(
+                &ctx,
+                crate::api::RegisterConfig {
+                    config: shared_config,
+                    script_ctx: self.context.clone(),
+                    kv_store: Arc::clone(&self.kv_store),
+                    patch_collector: Arc::clone(&collector),
+                    log_collector: logs_for_api,
+                    max_log_entries: self.limits.max_log_entries,
+                    script_name: script_name.to_string(),
+                },
+            ) {
+                return Err(format!("API 注册失败: {}", e));
+            }
+
+            // 沙箱加固
+            let sandbox_hardening = r#"
+                (function() {
+                    'use strict';
+                    globalThis.__prism_FnProto = Function.prototype;
+                    globalThis.__prism_origCall = Function.prototype.call;
+                    globalThis.__prism_origApply = Function.prototype.apply;
+                    delete globalThis.eval;
+                    delete globalThis.Function;
+                    delete globalThis.require;
+                    Object.defineProperty(globalThis, 'constructor', {
+                        get: function() { throw new Error('Sandbox: constructor access denied'); },
+                        configurable: false
+                    });
+                    var builtins = ['Object','Array','String','Number','Boolean','RegExp','Date','Error','TypeError','RangeError','SyntaxError','Map','Set','WeakMap','WeakSet','Promise','Symbol','JSON','Math','Reflect','Proxy','ArrayBuffer','DataView','Float32Array','Float64Array','Int8Array','Int16Array','Int32Array','Uint8Array','Uint16Array','Uint32Array','Uint8ClampedArray','BigInt','BigInt64Array','BigUint64Array'];
+                    for (var i = 0; i < builtins.length; i++) {
+                        try {
+                            var ctor = globalThis[builtins[i]];
+                            if (typeof ctor === 'function' && ctor.prototype) {
+                                Object.defineProperty(ctor.prototype, 'constructor', {
+                                    get: function() { throw new Error('Sandbox: constructor access denied'); },
+                                    configurable: false
+                                });
+                            }
+                        } catch(e) {}
+                    }
+                    var _dangerous = ['eval','Function','require','process','module','exports','__dirname','__filename','global','Buffer','child_process','fs','net','http','https','dlopen','WebAssembly','Proxy','Symbol','Reflect'];
+                    for (var k = 0; k < _dangerous.length; k++) {
+                        try {
+                            Object.defineProperty(globalThis, _dangerous[k], {
+                                get: function() { throw new Error('Sandbox: ' + _dangerous[k] + ' is permanently disabled'); },
+                                set: function() { throw new Error('Sandbox: re-introducing ' + _dangerous[k] + ' is permanently disabled'); },
+                                configurable: false,
+                                enumerable: false
+                            });
+                        } catch(e) {}
+                    }
+                })()
+            "#;
+            let _: std::result::Result<(), rquickjs::Error> = ctx.eval(sandbox_hardening);
+
+            // 包装脚本：返回 { success, error, config }
+            let wrapped_script = format!(
+                r#"(function() {{
+    'use strict';
+    var __maxDepth = {};
+    var __currentDepth = 0;
+    var __FnProto = globalThis.__prism_FnProto;
+    var __origCall = globalThis.__prism_origCall;
+    var __origApply = globalThis.__prism_origApply;
+    if (typeof __FnProto !== 'undefined' && typeof __origCall === 'function' && typeof __origApply === 'function') {{
+        __FnProto.call = function() {{
+            __currentDepth++;
+            if (__currentDepth > __maxDepth) throw new Error('Maximum recursion depth exceeded (' + __maxDepth + ')');
+            try {{ return __origCall.apply(this, arguments); }}
+            finally {{ __currentDepth--; }}
+        }};
+        __FnProto.apply = function(thisArg, args) {{
+            __currentDepth++;
+            if (__currentDepth > __maxDepth) throw new Error('Maximum recursion depth exceeded (' + __maxDepth + ')');
+            try {{ return __origApply.call(this, thisArg, args); }}
+            finally {{ __currentDepth--; }}
+        }};
+    }}
+    try {{
+        {}
+        // write-back 模式：调用 main 函数并返回配置
+        if (typeof main !== 'function') {{
+            log.error('Script must define a main(config) function for write-back mode');
+            return {{ success: false, error: 'Script must define a main(config) function' }};
+        }}
+        var __config_obj = config.get('');
+        var __result = main(__config_obj);
+        if (__result === null || typeof __result !== 'object') {{
+            log.error('main() must return a config object, got: ' + typeof __result);
+            return {{ success: false, error: 'main() must return a config object' }};
+        }}
+        return {{ success: true, config: __result }};
+    }} catch (e) {{
+        return {{ success: false, error: String(e.stack || e.message || e) }};
+    }} finally {{
+        if (typeof __FnProto !== 'undefined' && typeof __origCall === 'function' && typeof __origApply === 'function') {{
+            __FnProto.call = __origCall;
+            __FnProto.apply = __origApply;
+        }}
+    }}
+}})()"#,
+                self.limits.max_recursion_depth,
+                script
+            );
+
+            self.recursion_depth.fetch_add(1, Ordering::Relaxed);
+            let eval_result: std::result::Result<rquickjs::Value<'_>, rquickjs::Error> =
+                ctx.eval(wrapped_script.as_str());
+            self.recursion_depth.fetch_sub(1, Ordering::Relaxed);
+
+            // 检查中断
+            if self.step_limit_hit.load(Ordering::Acquire) {
+                let steps = step_counter.load(Ordering::Relaxed);
+                return Err(format!(
+                    "脚本执行超过最大循环迭代限制 ({} > {} 步)",
+                    steps, max_steps
+                ));
+            }
+            if self.recursion_limit_hit.load(Ordering::Acquire) {
+                let depth = self.recursion_depth.load(Ordering::Relaxed);
+                return Err(format!(
+                    "脚本执行超过最大递归深度限制 ({} > {})",
+                    depth, max_recursion
+                ));
+            }
+            if timed_out.load(Ordering::Acquire) {
+                return Err(format!(
+                    "脚本执行超时 ({}ms > {}ms 限制)",
+                    start.elapsed().as_micros().min(u64::MAX as u128) as u64,
+                    timeout_ms
+                ));
+            }
+
+            let _: std::result::Result<(), rquickjs::Error> = ctx.eval(
+                r#"delete globalThis.__prism_FnProto; delete globalThis.__prism_origCall; delete globalThis.__prism_origApply;"#
+            );
+
+            match eval_result {
+                Ok(val) => {
+                    if let Some(obj) = val.as_object() {
+                        let success = obj.get::<_, bool>("success").unwrap_or(false);
+                        if !success {
+                            let error = obj.get::<_, String>("error").unwrap_or_default();
+                            return Err(error);
+                        }
+                        // 读取配置：直接将 JS 对象转换为 JSON 字符串
+                        let config_val = obj.get::<_, rquickjs::Value>("config");
+                        if let Ok(cv) = config_val
+                            && cv.is_object() {
+                                // 使用 JSON.stringify 将 JS 对象转换为字符串
+                                // 先存储到全局变量，再序列化
+                                ctx.globals().set("__TMP_CONFIG__", cv.clone()).ok();
+                                let json_str: String = ctx.eval("JSON.stringify(globalThis.__TMP_CONFIG__)")
+                                    .unwrap_or_default();
+                                let _: std::result::Result<(), rquickjs::Error> =
+                                    ctx.eval("delete globalThis.__TMP_CONFIG__");
+                                if json_str.len() <= MAX_MODIFIED_CONFIG_BYTES
+                                    && let Ok(parsed) = serde_json::from_str(&json_str) {
+                                        return Ok(Some(parsed));
+                                    }
+                            }
+                        return Ok(None);
+                    }
+                    Ok(None)
+                }
+                Err(e) => Err(format!("JS 执行错误: {}", e)),
+            }
+        });
+
+        timed_out.store(true, Ordering::Release);
+        timeout_handle.thread().unpark();
+        let _ = timeout_handle.join();
+
+        let duration_us = start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        let patches = collector.drain_patches();
+
+        match result {
+            Ok(modified_config) => {
+                let mut script_logs = script_logs.lock().unwrap_or_else(|e| e.into_inner());
+                if script_logs.len() > self.limits.max_log_entries {
+                    script_logs.truncate(self.limits.max_log_entries);
                 }
 
-                match serde_json::from_str::<serde_json::Value>(json_str) {
-                    Ok(config) => {
-                        // 基本验证：确保是对象
-                        if config.is_object() {
-                            return Some(config);
-                        }
-                        tracing::warn!(
-                            target = "clash_prism_script",
-                            "Modified config is not a JSON object, ignoring"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            target = "clash_prism_script",
-                            error = %e,
-                            "Failed to parse modified config from script output"
-                        );
-                    }
+                let config_modified = modified_config.is_some();
+
+                WriteScriptResult {
+                    logs: script_logs.to_vec(),
+                    duration_us,
+                    success: true,
+                    error: None,
+                    patches,
+                    modified_config,
+                    config_modified,
+                }
+            }
+            Err(msg) => {
+                let script_logs = script_logs.lock().unwrap_or_else(|e| e.into_inner());
+                WriteScriptResult {
+                    logs: script_logs.to_vec(),
+                    duration_us,
+                    success: false,
+                    error: Some(msg),
+                    patches,
+                    modified_config: None,
+                    config_modified: false,
                 }
             }
         }
-        None
     }
 
     /// Validate script static security (without executing it).
