@@ -1391,10 +1391,9 @@ impl PrismApi {
             ctx.clone(),
             move |ctx, key: Option<String>| -> RjsResult<Value<'js>> {
                 let cfg_read = config.lock().unwrap_or_else(|e| e.into_inner());
-                let result = match key {
-                    Some(k) if !k.is_empty() => resolve_path(&cfg_read, &k),
-                    _ => cfg_read.clone(),
-                };
+                // None 表示获取根配置，Some(k) 表示路径查询
+                let key = key.unwrap_or_default();
+                let result = resolve_path(&cfg_read, &key);
                 drop(cfg_read);
                 json_value_to_rquickjs(&result, &ctx)
             },
@@ -1559,6 +1558,11 @@ fn char_boundary_floor(s: &str, max: usize) -> usize {
 
 /// 从 JSON 对象中解析点分隔路径
 fn resolve_path(value: &serde_json::Value, path: &str) -> serde_json::Value {
+    // 空路径表示根配置
+    if path.is_empty() {
+        return value.clone();
+    }
+
     let mut current = value;
     for part in path.split('.') {
         let (key, index) = parse_array_access(part);
