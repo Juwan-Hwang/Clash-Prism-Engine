@@ -25,13 +25,6 @@ use crate::api::{KvStore, PatchCollector, ScriptContext};
 use crate::limits::ScriptLimits;
 use crate::sandbox::SandboxConfig;
 
-/// 修改后配置的最大大小（10 MB）
-/// 防止脚本返回过大的配置导致内存问题
-const MAX_MODIFIED_CONFIG_BYTES: usize = 10 * 1024 * 1024;
-
-/// 内部使用的配置返回日志前缀
-const CONFIG_RETURN_PREFIX: &str = "__PRISM_MODIFIED_CONFIG__";
-
 /// 脚本执行结果
 #[derive(Debug)]
 pub struct ScriptResult {
@@ -104,6 +97,338 @@ impl std::fmt::Display for LogLevel {
         }
     }
 }
+
+// ══════════════════════════════════════════════════════════
+// 沙箱加固 JS 常量（execute / execute_with_write 共用）
+// ══════════════════════════════════════════════════════════
+
+/// 沙箱加固脚本 — 在用户脚本执行前注入，删除危险全局属性并锁定原型链。
+///
+/// ## 安全策略（5 层纵深防御）
+///
+/// 1. **词法验证**（validate()）：编译前拒绝 eval/Function/require 等危险标识符
+/// 2. **删除危险属性**：delete globalThis.eval/Function/require
+/// 3. **不可配置属性描述符**：Object.defineProperty 将危险属性设为 accessor（getter/setter 均抛异常）
+/// 4. **原型链 constructor 阻断**：对所有内置构造器的 prototype.constructor 设置不可配置 getter
+/// 5. **strict mode**：用户脚本在 'use strict' 下执行，禁止 arguments.callee、禁止未声明全局赋值
+///
+/// 注意：不使用 Object.freeze(globalThis)，因为 quickjs-ng (rquickjs 0.9+)
+/// 中冻结 globalThis 会导致后续的 `var` 声明抛出异常（var 需要在全局对象上
+/// 创建属性，但 frozen 对象禁止添加新属性）。
+/// Per-property 锁定方案既允许正常变量声明，又能阻止危险属性的重新引入。
+const SANDBOX_HARDENING_JS: &str = r#"
+                (function() {
+                    'use strict';
+                    // 在删除 Function 之前保存 Function.prototype 及其 call/apply 的引用。
+                    // quickjs-ng 中 delete globalThis.Function 后 Function 变为 undefined，
+                    // 导致 Function.prototype 不可访问。保存引用供包装脚本使用。
+                    globalThis.__prism_FnProto = Function.prototype;
+                    globalThis.__prism_origCall = Function.prototype.call;
+                    globalThis.__prism_origApply = Function.prototype.apply;
+                    // 删除危险的全局函数和构造器
+                    delete globalThis.eval;
+                    delete globalThis.Function;
+                    delete globalThis.require;
+                    // 限制 constructor 链访问（阻止 this.constructor.constructor('return process')() 等攻击）
+                    Object.defineProperty(globalThis, 'constructor', {
+                        get: function() { throw new Error('Sandbox: constructor access denied'); },
+                        configurable: false
+                    });
+                    // 遍历所有内置构造器，阻断原型链上的 constructor 访问
+                    var builtins = ['Object','Array','String','Number','Boolean','RegExp','Date','Error','TypeError','RangeError','SyntaxError','Map','Set','WeakMap','WeakSet','Promise','Symbol','JSON','Math','Reflect','Proxy','ArrayBuffer','DataView','Float32Array','Float64Array','Int8Array','Int16Array','Int32Array','Uint8Array','Uint16Array','Uint32Array','Uint8ClampedArray','BigInt','BigInt64Array','BigUint64Array'];
+                    for (var i = 0; i < builtins.length; i++) {
+                        try {
+                            var ctor = globalThis[builtins[i]];
+                            if (typeof ctor === 'function' && ctor.prototype) {
+                                Object.defineProperty(ctor.prototype, 'constructor', {
+                                    get: function() { throw new Error('Sandbox: constructor access denied'); },
+                                    configurable: false
+                                });
+                            }
+                        } catch(e) {}
+                    }
+                    // Per-property 锁定：对每个危险属性设置不可配置的 accessor property。
+                    // getter/setter 均抛异常，configurable: false 由 JS 引擎层面强制执行，
+                    // 即使脚本替换 Object.defineProperty 函数本身也无法绕过。
+                    //
+                    // 列表与 builtins 数组保持语义对齐：
+                    // - Node.js 环境危险 API：eval, Function, require, process, module, exports,
+                    //   __dirname, __filename, global, Buffer, child_process, fs, net, http, https, dlopen
+                    // - 沙箱逃逸向量：WebAssembly, Proxy, Symbol（可用于构造 Reflect.construct 等攻击链）
+                    var _dangerous = [
+                        'eval','Function','require','process','module','exports',
+                        '__dirname','__filename','global','Buffer',
+                        'child_process','fs','net','http','https','dlopen',
+                        'WebAssembly','Proxy','Symbol','Reflect'
+                    ];
+                    for (var k = 0; k < _dangerous.length; k++) {
+                        try {
+                            Object.defineProperty(globalThis, _dangerous[k], {
+                                get: function() { throw new Error('Sandbox: ' + _dangerous[k] + ' is permanently disabled'); },
+                                set: function() { throw new Error('Sandbox: re-introducing ' + _dangerous[k] + ' is permanently disabled'); },
+                                configurable: false,
+                                enumerable: false
+                            });
+                        } catch(e) {}
+                    }
+                })()
+            "#;
+
+/// 清理沙箱加固阶段保存的临时全局变量
+const SANDBOX_CLEANUP_JS: &str = r#"delete globalThis.__prism_FnProto; delete globalThis.__prism_origCall; delete globalThis.__prism_origApply;"#;
+
+// ══════════════════════════════════════════════════════════
+// SandboxedRuntime — 封装 rquickjs 运行时创建与生命周期管理
+// ══════════════════════════════════════════════════════════
+
+/// 封装带中断处理器的 rquickjs 运行时实例。
+///
+/// 将 `Runtime::new()`、内存限制、中断处理器（步数/递归/超时）、
+/// `Context::full()` 创建、以及超时线程的启停统一管理，
+/// 消除 `execute()` 和 `execute_with_write()` 之间的重复代码。
+struct SandboxedRuntime {
+    ctx: rquickjs::Context,
+    timed_out: Arc<AtomicBool>,
+    timeout_handle: Option<std::thread::JoinHandle<()>>,
+    step_counter: Arc<AtomicU64>,
+    max_steps: u64,
+    max_recursion: u32,
+    timeout_ms: u64,
+    start: std::time::Instant,
+}
+
+impl SandboxedRuntime {
+    /// 创建带完整安全中断机制的沙箱运行时。
+    ///
+    /// 包含：
+    /// - rquickjs Runtime + Context 创建
+    /// - 内存限制设置
+    /// - 步数计数器 / 递归深度 / 超时 中断处理器
+    /// - 超时计时线程（park_timeout + unpark 模式）
+    fn new(runtime: &ScriptRuntime) -> Result<Self, String> {
+        let start = std::time::Instant::now();
+
+        // 1. 创建 rquickjs 运行时
+        let rt = rquickjs::Runtime::new().map_err(|e| format!("无法创建 JS 运行时: {}", e))?;
+
+        // 设置内存限制（架构文档要求 50MB）
+        rt.set_memory_limit(runtime.limits.max_memory_bytes);
+
+        // 2. 设置执行超时中断机制
+        // 使用 AtomicBool 作为中断标志，rquickjs 引擎会在执行循环中定期检查
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let timeout_flag = Arc::clone(&timed_out);
+        let timeout_ms = runtime.limits.max_execution_time_ms;
+
+        // rquickjs 在每个操作码（opcode）执行后调用中断处理器，
+        // 因此通过计数器可以精确控制循环迭代和递归深度。
+        // 使用 AtomicU64 计数执行步数，超过 max_loop_iterations 时中断。
+        let step_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let max_steps = runtime.limits.max_loop_iterations;
+        let step_counter_clone = Arc::clone(&step_counter);
+        let max_recursion = runtime.limits.max_recursion_depth;
+        let recursion_depth_clone = Arc::clone(&runtime.recursion_depth);
+        let step_limit_flag = Arc::clone(&runtime.step_limit_hit);
+        let recursion_limit_flag = Arc::clone(&runtime.recursion_limit_hit);
+
+        // NOTE (L-13): rquickjs 在每个 opcode 执行后调用此中断处理器，
+        // 因此 fetch_add 计数器会在每次 opcode 时触发。
+        // AtomicU64::fetch_add 是单条原子指令（x86_64 上为 lock xadd），
+        // 开销约 1-2ns，对于安全关键型沙箱环境此性能影响可接受。
+        let handler: Box<dyn FnMut() -> bool + Send> = Box::new(move || {
+            // 检查是否已超时
+            if timeout_flag.load(Ordering::Acquire) {
+                return true; // 中断执行
+            }
+            let steps = step_counter_clone.fetch_add(1, Ordering::Relaxed);
+            if steps > max_steps {
+                step_limit_flag.store(true, Ordering::Release);
+                return true; // 超过最大循环迭代次数，中断执行
+            }
+            if recursion_depth_clone.load(Ordering::Relaxed) > max_recursion {
+                recursion_limit_flag.store(true, Ordering::Release);
+                return true; // 超过最大递归深度，中断执行
+            }
+            false
+        });
+        rt.set_interrupt_handler(Some(handler));
+
+        // 启动超时计时线程：使用 park_timeout + unpark 模式
+        // 主线程完成时调用 unpark() 唤醒超时线程，避免 join 阻塞到 sleep 结束
+        //
+        // 取决于操作系统的调度精度（通常为 1-15ms，Linux 上约 1ms）。
+        // 这意味着实际超时时间可能略长于配置值，但在安全方向上（不会提前中断）。
+        // 对于需要精确超时的场景，rquickjs 的中断处理器会在每个 opcode 后检查
+        // timed_out 标志，提供更精确的执行中断。
+        let timeout_handle = {
+            let flag = Arc::clone(&timed_out);
+            std::thread::spawn(move || {
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+                loop {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    std::thread::park_timeout(remaining);
+                    // spurious wakeup 或 unpark() 唤醒后检查是否已到超时
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    // 若被 unpark() 唤醒（主线程完成），flag 已被设为 true，
+                    // 此时 remaining > 0 但无需继续 sleep，直接退出
+                    if flag.load(Ordering::Acquire) {
+                        return;
+                    }
+                }
+                flag.store(true, Ordering::Release);
+            })
+        };
+
+        // 3. 创建 JS 上下文
+        let ctx = match rquickjs::Context::full(&rt) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                // 确保停止超时线程
+                timed_out.store(true, Ordering::Release);
+                timeout_handle.thread().unpark();
+                let _ = timeout_handle.join();
+                return Err(format!("无法创建 JS 上下文: {}", e));
+            }
+        };
+
+        Ok(Self {
+            ctx,
+            timed_out,
+            timeout_handle: Some(timeout_handle),
+            step_counter,
+            max_steps,
+            max_recursion,
+            timeout_ms,
+            start,
+        })
+    }
+
+    /// 检查中断标志，返回错误信息（如果有）。
+    ///
+    /// 优先检查步数和递归标志（由 interrupt handler 精确设置），
+    /// 再检查超时标志，避免超时与步数/递归超限同时发生时错误消息不精确。
+    fn check_interrupts(&self, runtime: &ScriptRuntime) -> Result<(), String> {
+        if runtime.step_limit_hit.load(Ordering::Acquire) {
+            let steps = self.step_counter.load(Ordering::Relaxed);
+            return Err(format!(
+                "脚本执行超过最大循环迭代限制 ({} > {} 步)",
+                steps, self.max_steps
+            ));
+        }
+        if runtime.recursion_limit_hit.load(Ordering::Acquire) {
+            let depth = runtime.recursion_depth.load(Ordering::Relaxed);
+            return Err(format!(
+                "脚本执行超过最大递归深度限制 ({} > {})",
+                depth, self.max_recursion
+            ));
+        }
+        if self.timed_out.load(Ordering::Acquire) {
+            return Err(format!(
+                "脚本执行超时 ({}ms > {}ms 限制)",
+                self.start.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                self.timeout_ms
+            ));
+        }
+        Ok(())
+    }
+
+    /// 停止超时线程并返回执行耗时（微秒）。
+    ///
+    /// 先 unpark 唤醒（使其立即退出 park_timeout），
+    /// 再 join 等待线程结束（此时 join 几乎立即返回）。
+    fn shutdown(mut self) -> u64 {
+        self.timed_out.store(true, Ordering::Release);
+        if let Some(handle) = self.timeout_handle.take() {
+            handle.thread().unpark();
+            let _ = handle.join();
+        }
+        self.start.elapsed().as_micros().min(u64::MAX as u128) as u64
+    }
+}
+
+/// 安全网：如果 SandboxedRuntime 因 panic 等原因未被显式 shutdown，
+/// Drop 仍会确保超时线程被正确回收，避免线程泄漏。
+impl Drop for SandboxedRuntime {
+    fn drop(&mut self) {
+        self.timed_out.store(true, Ordering::Release);
+        if let Some(handle) = self.timeout_handle.take() {
+            handle.thread().unpark();
+            let _ = handle.join();
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Wrapper 脚本构建（递归深度追踪 + 用户代码注入）
+// ══════════════════════════════════════════════════════════
+
+/// 构建带递归深度追踪的包装脚本。
+///
+/// ## quickjs-ng 兼容性说明
+///
+/// 在 quickjs-ng (rquickjs 0.9+) 中，`delete globalThis.Function` 会导致
+/// `Function.prototype` 不可访问（Function 变为 undefined）。
+/// 因此包装脚本不能直接引用 `Function.prototype.call/apply`。
+///
+/// 解决方案：在沙箱加固阶段（Function 被删除之前），将
+/// `Function.prototype.call/apply` 保存到全局变量 `__prism_origCall/Apply` 中，
+/// 包装脚本通过这些全局变量访问原始方法。
+/// 执行完毕后清理这些全局变量。
+///
+/// Rust 层的 recursion_depth（AtomicU32）+ 中断处理器仍作为后备机制保留。
+///
+/// ## 参数
+/// * `max_depth` - 最大递归深度
+/// * `user_body` - 注入到 try 块中的用户代码（不含外层 try/catch/finally）
+fn build_wrapper_script(max_depth: u32, user_body: &str) -> String {
+    // 使用字符串替换而非 format! 注入 user_body，
+    // 因为 user_body 中的 JS 大括号 { } 会与 format! 占位符冲突。
+    const TEMPLATE: &str = r#"(function() {
+    'use strict';
+    var __maxDepth = __MAX_DEPTH__;
+    var __currentDepth = 0;
+    var __FnProto = globalThis.__prism_FnProto;
+    var __origCall = globalThis.__prism_origCall;
+    var __origApply = globalThis.__prism_origApply;
+    if (typeof __FnProto !== 'undefined' && typeof __origCall === 'function' && typeof __origApply === 'function') {
+        __FnProto.call = function() {
+            __currentDepth++;
+            if (__currentDepth > __maxDepth) throw new Error('Maximum recursion depth exceeded (' + __maxDepth + ')');
+            try { return __origCall.apply(this, arguments); }
+            finally { __currentDepth--; }
+        };
+        __FnProto.apply = function(thisArg, args) {
+            __currentDepth++;
+            if (__currentDepth > __maxDepth) throw new Error('Maximum recursion depth exceeded (' + __maxDepth + ')');
+            try { return __origApply.call(this, thisArg, args); }
+            finally { __currentDepth--; }
+        };
+    }
+    try {
+        __USER_BODY__
+    } catch (e) {
+        return { success: false, error: String(e.stack || e.message || e) };
+    } finally {
+        if (typeof __FnProto !== 'undefined' && typeof __origCall === 'function' && typeof __origApply === 'function') {
+            __FnProto.call = __origCall;
+            __FnProto.apply = __origApply;
+        }
+    }
+})()"#;
+    TEMPLATE
+        .replace("__MAX_DEPTH__", &max_depth.to_string())
+        .replace("__USER_BODY__", user_body)
+}
+
+// ══════════════════════════════════════════════════════════
+// 脚本运行时
+// ══════════════════════════════════════════════════════════
 
 /// 脚本运行时
 pub struct ScriptRuntime {
@@ -208,28 +533,29 @@ impl ScriptRuntime {
         Arc::clone(&self.kv_store)
     }
 
-    /// 执行脚本字符串
+    // ─────────────────────────────────────────────────────
+    // 公共前置检查（execute / execute_with_write 共用）
+    // ─────────────────────────────────────────────────────
+
+    /// 执行所有前置安全检查，失败时返回错误信息。
     ///
-    /// # Arguments
-    /// * `script` - JavaScript 源代码
-    /// * `script_name` - 脚本名称（用于来源追踪）
-    /// * `config` - 当前配置（JSON）
-    ///
-    /// # Returns
-    /// 执行结果，包含日志、状态和脚本生成的 Patch
-    pub fn execute(
+    /// 包含：
+    /// - debug_assert 沙箱安全检查
+    /// - tracing::trace 沙箱配置日志
+    /// - validate() 词法级安全检查
+    /// - 配置大小检查（防内存炸弹）
+    /// - 沙箱感知安全检查（fetch/XHR/fs 等模式检测）
+    fn validate_and_check_sandbox(
         &self,
         script: &str,
-        script_name: &str,
         config: &serde_json::Value,
-    ) -> ScriptResult {
-        let start = std::time::Instant::now();
-
+        script_name: &str,
+    ) -> Result<(), String> {
         // 生产环境中沙箱安全通过词法级检查和运行时加固代码保证，
         // 此断言作为开发阶段的额外安全网。
         debug_assert!(
             self.sandbox.is_safe(),
-            "ScriptRuntime::execute() 要求沙箱处于 strict (safe) 模式。\
+            "ScriptRuntime 要求沙箱处于 strict (safe) 模式。\
              当前配置：allow_network={}, allow_filesystem={}, \
              allow_child_process={}, allow_workers={}",
             self.sandbox.allow_network,
@@ -251,20 +577,17 @@ impl ScriptRuntime {
 
         // 先进行安全验证（词法级安全检查）
         if let Err(e) = self.validate(script) {
-            return self.error_result(start, format!("脚本安全验证失败: {}", e));
+            return Err(format!("脚本安全验证失败: {}", e));
         }
 
         // 配置大小检查（防内存炸弹）
         let config_str = config.to_string();
         if config_str.len() > self.limits.max_config_bytes {
-            return self.error_result(
-                start,
-                format!(
-                    "配置大小 ({} 字节) 超过限制 ({} 字节)",
-                    config_str.len(),
-                    self.limits.max_config_bytes
-                ),
-            );
+            return Err(format!(
+                "配置大小 ({} 字节) 超过限制 ({} 字节)",
+                config_str.len(),
+                self.limits.max_config_bytes
+            ));
         }
 
         // 沙箱感知安全检查：根据沙箱配置动态检测危险模式
@@ -281,7 +604,7 @@ impl ScriptRuntime {
             ];
             for (pattern, hint) in &network_patterns {
                 if cleaned_for_sandbox.contains(pattern) {
-                    return self.error_result(start, format!("沙箱安全检查失败: {}", hint));
+                    return Err(format!("沙箱安全检查失败: {}", hint));
                 }
             }
         }
@@ -295,203 +618,126 @@ impl ScriptRuntime {
             ];
             for (pattern, hint) in &fs_patterns {
                 if cleaned_for_sandbox.contains(pattern) {
-                    return self.error_result(start, format!("沙箱安全检查失败: {}", hint));
+                    return Err(format!("沙箱安全检查失败: {}", hint));
                 }
             }
         }
 
+        Ok(())
+    }
+
+    /// 重置限制标志，避免前一次执行的状态影响本次执行。
+    fn reset_limit_flags(&self) {
+        self.step_limit_hit.store(false, Ordering::Release);
+        self.recursion_limit_hit.store(false, Ordering::Release);
+    }
+
+    // ─────────────────────────────────────────────────────
+    // API 注册（execute / execute_with_write 共用）
+    // ─────────────────────────────────────────────────────
+
+    /// 在 JS 上下文中注册完整的 PrismContext API。
+    ///
+    /// 必须克隆 config：execute() 接收 &serde_json::Value 引用，
+    /// 但 shared_config 需要跨线程（通过 Arc<Mutex<>>）共享给 JS 回调闭包。
+    /// serde_json::Value 的 clone 是深拷贝，对于大型配置有一定开销，
+    /// 但这是 &Value → Arc<Mutex<Value>> 所必需的所有权转移。
+    fn register_api(
+        &self,
+        ctx: &rquickjs::Ctx<'_>,
+        config: &serde_json::Value,
+        collector: &Arc<PatchCollector>,
+        logs: &Arc<Mutex<Vec<LogEntry>>>,
+        script_name: &str,
+    ) -> Result<(), String> {
+        crate::api::PrismApi::register(
+            ctx,
+            crate::api::RegisterConfig {
+                config: Arc::new(Mutex::new(config.clone())),
+                script_ctx: self.context.clone(),
+                kv_store: Arc::clone(&self.kv_store),
+                patch_collector: Arc::clone(collector),
+                log_collector: Arc::clone(logs),
+                max_log_entries: self.limits.max_log_entries,
+                script_name: script_name.to_string(),
+            },
+        )
+        .map_err(|e| format!("API 注册失败: {}", e))
+    }
+
+    // ─────────────────────────────────────────────────────
+    // 日志收集辅助
+    // ─────────────────────────────────────────────────────
+
+    /// 从 Mutex<Vec<LogEntry>> 中安全地取出日志，处理中毒情况。
+    /// 使用 std::mem::take 直接移动数据，避免不必要的克隆。
+    fn drain_logs(&self, script_logs: &Arc<Mutex<Vec<LogEntry>>>) -> Vec<LogEntry> {
+        let mut guard = script_logs.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(
+                target = "clash_prism_script",
+                "script_logs Mutex 已中毒，正在恢复中毒数据"
+            );
+            poisoned.into_inner()
+        });
+
+        let mut logs = std::mem::take(&mut *guard);
+
+        if logs.len() > self.limits.max_log_entries {
+            logs.truncate(self.limits.max_log_entries);
+        }
+
+        logs
+    }
+
+    // ─────────────────────────────────────────────────────
+    // execute() — 标准脚本执行
+    // ─────────────────────────────────────────────────────
+
+    /// 执行脚本字符串
+    ///
+    /// # Arguments
+    /// * `script` - JavaScript 源代码
+    /// * `script_name` - 脚本名称（用于来源追踪）
+    /// * `config` - 当前配置（JSON）
+    ///
+    /// # Returns
+    /// 执行结果，包含日志、状态和脚本生成的 Patch
+    pub fn execute(
+        &self,
+        script: &str,
+        script_name: &str,
+        config: &serde_json::Value,
+    ) -> ScriptResult {
+        let start = std::time::Instant::now();
+
+        // 公共前置检查（debug_assert + validate + config size + sandbox patterns）
+        if let Err(e) = self.validate_and_check_sandbox(script, config, script_name) {
+            return self.error_result(start, e);
+        }
+
+        // 重置限制标志
+        self.reset_limit_flags();
+
         // 创建 Patch 收集器
         let collector = Arc::new(PatchCollector::new());
 
-        // 1. 创建 rquickjs 运行时和上下文
-        let rt = match rquickjs::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => return self.error_result(start, format!("无法创建 JS 运行时: {}", e)),
-        };
-
-        // 设置内存限制（架构文档要求 50MB）
-        rt.set_memory_limit(self.limits.max_memory_bytes);
-
-        // 设置执行超时中断机制
-        // 使用 AtomicBool 作为中断标志，rquickjs 引擎会在执行循环中定期检查
-        let timed_out = Arc::new(AtomicBool::new(false));
-        let timeout_flag = Arc::clone(&timed_out);
-        let timeout_ms = self.limits.max_execution_time_ms;
-
-        // rquickjs 在每个操作码（opcode）执行后调用中断处理器，
-        // 因此通过计数器可以精确控制循环迭代和递归深度。
-        // 使用 AtomicU64 计数执行步数，超过 max_loop_iterations 时中断。
-        let step_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-        let max_steps = self.limits.max_loop_iterations;
-        let step_counter_clone = Arc::clone(&step_counter);
-        let max_recursion = self.limits.max_recursion_depth;
-        let recursion_depth_clone = Arc::clone(&self.recursion_depth);
-        let step_limit_flag = Arc::clone(&self.step_limit_hit);
-        let recursion_limit_flag = Arc::clone(&self.recursion_limit_hit);
-
-        let handler: Box<dyn FnMut() -> bool + Send> = Box::new(move || {
-            // NOTE (L-13): rquickjs 在每个 opcode 执行后调用此中断处理器，
-            // 因此 fetch_add 计数器会在每次 opcode 时触发。
-            // AtomicU64::fetch_add 是单条原子指令（x86_64 上为 lock xadd），
-            // 开销约 1-2ns，对于安全关键型沙箱环境此性能影响可接受。
-            // 检查是否已超时
-            if timeout_flag.load(Ordering::Acquire) {
-                return true; // 中断执行
-            }
-            let steps = step_counter_clone.fetch_add(1, Ordering::Relaxed);
-            if steps > max_steps {
-                step_limit_flag.store(true, Ordering::Release);
-                return true; // 超过最大循环迭代次数，中断执行
-            }
-            if recursion_depth_clone.load(Ordering::Relaxed) > max_recursion {
-                recursion_limit_flag.store(true, Ordering::Release);
-                return true; // 超过最大递归深度，中断执行
-            }
-            false
-        });
-        rt.set_interrupt_handler(Some(handler));
-
-        // 启动超时计时线程：使用 park_timeout + unpark 模式
-        // 主线程完成时调用 unpark() 唤醒超时线程，避免 join 阻塞到 sleep 结束
-        //
-        // 取决于操作系统的调度精度（通常为 1-15ms，Linux 上约 1ms）。
-        // 这意味着实际超时时间可能略长于配置值，但在安全方向上（不会提前中断）。
-        // 对于需要精确超时的场景，rquickjs 的中断处理器会在每个 opcode 后检查
-        // timed_out 标志，提供更精确的执行中断。
-        let timeout_handle = {
-            let flag = Arc::clone(&timed_out);
-            std::thread::spawn(move || {
-                let deadline =
-                    std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-                loop {
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                    if remaining.is_zero() {
-                        break;
-                    }
-                    std::thread::park_timeout(remaining);
-                    // spurious wakeup 或 unpark() 唤醒后检查是否已到超时
-                    if std::time::Instant::now() >= deadline {
-                        break;
-                    }
-                    // 若被 unpark() 唤醒（主线程完成），flag 已被设为 true，
-                    // 此时 remaining > 0 但无需继续 sleep，直接退出
-                    if flag.load(Ordering::Acquire) {
-                        return;
-                    }
-                }
-                flag.store(true, Ordering::Release);
-            })
-        };
-
-        let ctx = match rquickjs::Context::full(&rt) {
-            Ok(ctx) => ctx,
-            Err(e) => {
-                // 确保停止超时线程
-                timed_out.store(true, Ordering::Release);
-                timeout_handle.thread().unpark();
-                let _ = timeout_handle.join();
-                return self.error_result(start, format!("无法创建 JS 上下文: {}", e));
-            }
+        // 创建沙箱运行时
+        let sandboxed = match SandboxedRuntime::new(self) {
+            Ok(s) => s,
+            Err(e) => return self.error_result(start, e),
         };
 
         let script_logs: Arc<Mutex<Vec<LogEntry>>> = Arc::new(Mutex::new(Vec::with_capacity(64)));
         let logs_for_api = Arc::clone(&script_logs);
 
-        // 2. 在上下文中执行脚本，注册完整 API 并运行
-        // 必须克隆 config：execute() 接收 &serde_json::Value 引用，
-        // 但 shared_config 需要跨线程（通过 Arc<Mutex<>>）共享给 JS 回调闭包。
-        // serde_json::Value 的 clone 是深拷贝，对于大型配置有一定开销，
-        // 但这是 &Value → Arc<Mutex<Value>> 所必需的所有权转移。
-        let shared_config = Arc::new(std::sync::Mutex::new(config.clone()));
-        let result = ctx.with(|ctx| {
+        // 在上下文中执行脚本，注册完整 API 并运行
+        let result = sandboxed.ctx.with(|ctx| {
             // 注册完整的 PrismContext API（§5.2）
-            if let Err(e) = crate::api::PrismApi::register(
-                &ctx,
-                crate::api::RegisterConfig {
-                    config: shared_config,
-                    script_ctx: self.context.clone(),
-                    kv_store: Arc::clone(&self.kv_store),
-                    patch_collector: Arc::clone(&collector),
-                    log_collector: logs_for_api,
-                    max_log_entries: self.limits.max_log_entries,
-                    script_name: script_name.to_string(),
-                },
-            ) {
-                return Err(format!("API 注册失败: {}", e));
-            }
+            self.register_api(&ctx, config, &collector, &logs_for_api, script_name)?;
 
-            // 即使词法验证被 Unicode/间接调用绕过，运行时也能阻止对危险 API 的访问
-            //
-            // ## 安全策略（5 层纵深防御）
-            //
-            // 1. **词法验证**（validate()）：编译前拒绝 eval/Function/require 等危险标识符
-            // 2. **删除危险属性**：delete globalThis.eval/Function/require
-            // 3. **不可配置属性描述符**：Object.defineProperty 将危险属性设为 accessor（getter/setter 均抛异常）
-            // 4. **原型链 constructor 阻断**：对所有内置构造器的 prototype.constructor 设置不可配置 getter
-            // 5. **strict mode**：用户脚本在 'use strict' 下执行，禁止 arguments.callee、禁止未声明全局赋值
-            //
-            // 注意：不使用 Object.freeze(globalThis)，因为 quickjs-ng (rquickjs 0.9+)
-            // 中冻结 globalThis 会导致后续的 `var` 声明抛出异常（var 需要在全局对象上
-            // 创建属性，但 frozen 对象禁止添加新属性）。
-            // Per-property 锁定方案既允许正常变量声明，又能阻止危险属性的重新引入。
-            let sandbox_hardening = r#"
-                (function() {
-                    'use strict';
-                    // 在删除 Function 之前保存 Function.prototype 及其 call/apply 的引用。
-                    // quickjs-ng 中 delete globalThis.Function 后 Function 变为 undefined，
-                    // 导致 Function.prototype 不可访问。保存引用供包装脚本使用。
-                    globalThis.__prism_FnProto = Function.prototype;
-                    globalThis.__prism_origCall = Function.prototype.call;
-                    globalThis.__prism_origApply = Function.prototype.apply;
-                    // 删除危险的全局函数和构造器
-                    delete globalThis.eval;
-                    delete globalThis.Function;
-                    delete globalThis.require;
-                    // 限制 constructor 链访问（阻止 this.constructor.constructor('return process')() 等攻击）
-                    Object.defineProperty(globalThis, 'constructor', {
-                        get: function() { throw new Error('Sandbox: constructor access denied'); },
-                        configurable: false
-                    });
-                    // 遍历所有内置构造器，阻断原型链上的 constructor 访问
-                    var builtins = ['Object','Array','String','Number','Boolean','RegExp','Date','Error','TypeError','RangeError','SyntaxError','Map','Set','WeakMap','WeakSet','Promise','Symbol','JSON','Math','Reflect','Proxy','ArrayBuffer','DataView','Float32Array','Float64Array','Int8Array','Int16Array','Int32Array','Uint8Array','Uint16Array','Uint32Array','Uint8ClampedArray','BigInt','BigInt64Array','BigUint64Array'];
-                    for (var i = 0; i < builtins.length; i++) {
-                        try {
-                            var ctor = globalThis[builtins[i]];
-                            if (typeof ctor === 'function' && ctor.prototype) {
-                                Object.defineProperty(ctor.prototype, 'constructor', {
-                                    get: function() { throw new Error('Sandbox: constructor access denied'); },
-                                    configurable: false
-                                });
-                            }
-                        } catch(e) {}
-                    }
-                    // Per-property 锁定：对每个危险属性设置不可配置的 accessor property。
-                    // getter/setter 均抛异常，configurable: false 由 JS 引擎层面强制执行，
-                    // 即使脚本替换 Object.defineProperty 函数本身也无法绕过。
-                    //
-                    // 列表与 builtins 数组保持语义对齐：
-                    // - Node.js 环境危险 API：eval, Function, require, process, module, exports,
-                    //   __dirname, __filename, global, Buffer, child_process, fs, net, http, https, dlopen
-                    // - 沙箱逃逸向量：WebAssembly, Proxy, Symbol（可用于构造 Reflect.construct 等攻击链）
-                    var _dangerous = [
-                        'eval','Function','require','process','module','exports',
-                        '__dirname','__filename','global','Buffer',
-                        'child_process','fs','net','http','https','dlopen',
-                        'WebAssembly','Proxy','Symbol','Reflect'
-                    ];
-                    for (var k = 0; k < _dangerous.length; k++) {
-                        try {
-                            Object.defineProperty(globalThis, _dangerous[k], {
-                                get: function() { throw new Error('Sandbox: ' + _dangerous[k] + ' is permanently disabled'); },
-                                set: function() { throw new Error('Sandbox: re-introducing ' + _dangerous[k] + ' is permanently disabled'); },
-                                configurable: false,
-                                enumerable: false
-                            });
-                        } catch(e) {}
-                    }
-                })()
-            "#;
-            let harden_result: std::result::Result<(), rquickjs::Error> = ctx.eval(sandbox_hardening);
+            // 沙箱加固（即使词法验证被 Unicode/间接调用绕过，运行时也能阻止对危险 API 的访问）
+            let harden_result: std::result::Result<(), rquickjs::Error> =
+                ctx.eval(SANDBOX_HARDENING_JS);
             if let Err(e) = harden_result {
                 tracing::warn!(
                     target = "clash_prism_script",
@@ -503,57 +749,9 @@ impl ScriptRuntime {
                 );
             }
 
-            // 包装用户脚本为带递归深度追踪的形式。
-            //
-            // ## quickjs-ng 兼容性说明
-            //
-            // 在 quickjs-ng (rquickjs 0.9+) 中，`delete globalThis.Function` 会导致
-            // `Function.prototype` 不可访问（Function 变为 undefined）。
-            // 因此包装脚本不能直接引用 `Function.prototype.call/apply`。
-            //
-            // 解决方案：在沙箱加固阶段（Function 被删除之前），将
-            // `Function.prototype.call/apply` 保存到全局变量 `__prism_origCall/Apply` 中，
-            // 包装脚本通过这些全局变量访问原始方法。
-            // 执行完毕后清理这些全局变量。
-            //
-            // Rust 层的 recursion_depth（AtomicU32）+ 中断处理器仍作为后备机制保留。
-            let wrapped_script = format!(
-                r#"(function() {{
-    'use strict';
-    var __maxDepth = {};
-    var __currentDepth = 0;
-    var __FnProto = globalThis.__prism_FnProto;
-    var __origCall = globalThis.__prism_origCall;
-    var __origApply = globalThis.__prism_origApply;
-    if (typeof __FnProto !== 'undefined' && typeof __origCall === 'function' && typeof __origApply === 'function') {{
-        __FnProto.call = function() {{
-            __currentDepth++;
-            if (__currentDepth > __maxDepth) throw new Error('Maximum recursion depth exceeded (' + __maxDepth + ')');
-            try {{ return __origCall.apply(this, arguments); }}
-            finally {{ __currentDepth--; }}
-        }};
-        __FnProto.apply = function(thisArg, args) {{
-            __currentDepth++;
-            if (__currentDepth > __maxDepth) throw new Error('Maximum recursion depth exceeded (' + __maxDepth + ')');
-            try {{ return __origApply.call(this, thisArg, args); }}
-            finally {{ __currentDepth--; }}
-        }};
-    }}
-    try {{
-        {}
-        return {{ success: true }};
-    }} catch (e) {{
-        return {{ success: false, error: String(e.stack || e.message || e) }};
-    }} finally {{
-        if (typeof __FnProto !== 'undefined' && typeof __origCall === 'function' && typeof __origApply === 'function') {{
-            __FnProto.call = __origCall;
-            __FnProto.apply = __origApply;
-        }}
-    }}
-}})()"#,
-                self.limits.max_recursion_depth,
-                script
-            );
+            // 包装用户脚本为带递归深度追踪的形式
+            let user_body = format!("{}\nreturn {{ success: true }};", script);
+            let wrapped_script = build_wrapper_script(self.limits.max_recursion_depth, &user_body);
 
             // 使用 Ctx::eval 直接编译并执行字符串
             self.recursion_depth.fetch_add(1, Ordering::Relaxed);
@@ -562,35 +760,12 @@ impl ScriptRuntime {
             self.recursion_depth.fetch_sub(1, Ordering::Relaxed);
 
             // 检查是否因超时、循环限制或递归深度被中断
-            // 优先检查步数和递归标志（由 interrupt handler 精确设置），
-            // 再检查超时标志，避免超时与步数/递归超限同时发生时错误消息不精确
-            if self.step_limit_hit.load(Ordering::Acquire) {
-                let steps = step_counter.load(Ordering::Relaxed);
-                return Err(format!(
-                    "脚本执行超过最大循环迭代限制 ({} > {} 步)",
-                    steps, max_steps
-                ));
-            }
-            if self.recursion_limit_hit.load(Ordering::Acquire) {
-                let depth = self.recursion_depth.load(Ordering::Relaxed);
-                return Err(format!(
-                    "脚本执行超过最大递归深度限制 ({} > {})",
-                    depth, max_recursion
-                ));
-            }
-            if timed_out.load(Ordering::Acquire) {
-                return Err(format!(
-                    "脚本执行超时 ({}ms > {}ms 限制)",
-                    start.elapsed().as_micros().min(u64::MAX as u128) as u64,
-                    timeout_ms
-                ));
-            }
+            sandboxed.check_interrupts(self)?;
 
             // 清理沙箱加固阶段保存的临时全局变量
-            let _: std::result::Result<(), rquickjs::Error> = ctx.eval(
-                r#"delete globalThis.__prism_FnProto; delete globalThis.__prism_origCall; delete globalThis.__prism_origApply;"#
-            );
+            let _: std::result::Result<(), rquickjs::Error> = ctx.eval(SANDBOX_CLEANUP_JS);
 
+            // 解析 eval_result：execute 只检查 success
             match eval_result {
                 Ok(val) => {
                     if let Some(obj) = val.as_object() {
@@ -606,33 +781,15 @@ impl ScriptRuntime {
             }
         });
 
-        // 停止超时计时线程：先 unpark 唤醒（使其立即退出 park_timeout），
-        // 再 join 等待线程结束（此时 join 几乎立即返回）
-        timed_out.store(true, Ordering::Release);
-        timeout_handle.thread().unpark();
-        let _ = timeout_handle.join();
-
-        let duration_us = start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        // 停止超时线程
+        let duration_us = sandboxed.shutdown();
 
         // 收集脚本生成的 Patch
         let patches = collector.drain_patches();
 
         match result {
             Ok(()) => {
-                let mut logs = match script_logs.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => {
-                        tracing::warn!(
-                            target = "clash_prism_script",
-                            "script_logs Mutex 已中毒，正在恢复中毒数据"
-                        );
-                        poisoned.into_inner()
-                    }
-                };
-
-                if logs.len() > self.limits.max_log_entries {
-                    logs.truncate(self.limits.max_log_entries);
-                }
+                let mut logs = self.drain_logs(&script_logs);
 
                 logs.push(LogEntry {
                     level: LogLevel::Info,
@@ -663,8 +820,6 @@ impl ScriptRuntime {
                     });
                 }
 
-                let logs = (*logs).clone();
-
                 ScriptResult {
                     logs,
                     duration_us,
@@ -689,6 +844,10 @@ impl ScriptRuntime {
             }
         }
     }
+
+    // ─────────────────────────────────────────────────────
+    // execute_with_write() — 带配置写回的脚本执行
+    // ─────────────────────────────────────────────────────
 
     /// 执行脚本并允许返回修改后的配置
     ///
@@ -726,127 +885,183 @@ impl ScriptRuntime {
         script_name: &str,
         config: &serde_json::Value,
     ) -> WriteScriptResult {
-        // 包装用户脚本以捕获返回的配置
-        // 使用 config.get('') 获取完整配置对象，传递给用户的 main 函数
-        let wrapped_script = format!(
-            r"
-{script}
+        // 使用与 execute() 相同的执行流程，但修改 wrapper 来返回配置
+        // 配置通过 JS 返回值直接传递，不受日志系统的 10KB 限制
 
-// Prism write-back wrapper: capture and validate returned config
-if (typeof main !== 'function') {{
-    log.error('Script must define a main(config) function for write-back mode');
-}} else {{
-    try {{
-        // 获取完整配置对象 (空字符串获取整个配置)
-        var __config_obj = config.get('');
-        // 调用用户的 main 函数
-        var __prism_result = main(__config_obj);
-        if (__prism_result === null || typeof __prism_result !== 'object') {{
-            log.error('main() must return a config object, got: ' + typeof __prism_result);
-        }} else {{
-            // 将修改后的配置序列化并通过特殊日志前缀传递给 Rust
-            log.info('__PRISM_MODIFIED_CONFIG__' + JSON.stringify(__prism_result));
-        }}
-    }} catch (e) {{
-        log.error('main() execution failed: ' + String(e.stack || e.message || e));
-    }}
-}}
-"
-        );
+        // 公共前置检查（debug_assert + validate + config size + sandbox patterns）
+        if let Err(e) = self.validate_and_check_sandbox(script, config, script_name) {
+            return WriteScriptResult {
+                logs: vec![],
+                duration_us: 0,
+                success: false,
+                error: Some(e),
+                patches: vec![],
+                modified_config: None,
+                config_modified: false,
+            };
+        }
 
-        // 使用现有的 execute 方法执行包装后的脚本
-        // 对于 write-back 模式，我们需要更大的输出限制来容纳配置
-        let result = self.execute(&wrapped_script, script_name, config);
+        // 重置限制标志
+        self.reset_limit_flags();
 
-        // 从日志中提取修改后的配置（反向遍历，优先使用最后一条匹配的记录）
-        // 反向遍历可以防止用户脚本通过提前输出相同前缀来欺骗系统
-        let modified_config = Self::extract_modified_config_from_logs(&result.logs);
-
-        // 验证修改后的配置大小
-        if let Some(ref config) = modified_config {
-            let config_size = serde_json::to_string(config).map(|s| s.len()).unwrap_or(0);
-            if config_size > MAX_MODIFIED_CONFIG_BYTES {
+        // 创建沙箱运行时
+        let sandboxed = match SandboxedRuntime::new(self) {
+            Ok(s) => s,
+            Err(e) => {
                 return WriteScriptResult {
-                    logs: result.logs,
-                    duration_us: result.duration_us,
+                    logs: vec![],
+                    duration_us: 0,
                     success: false,
-                    error: Some(format!(
-                        "Modified config too large: {} bytes (max {})",
-                        config_size, MAX_MODIFIED_CONFIG_BYTES
-                    )),
-                    patches: result.patches,
+                    error: Some(e),
+                    patches: vec![],
                     modified_config: None,
                     config_modified: false,
                 };
             }
-        }
+        };
 
-        // 判断配置是否被修改
-        let config_modified = modified_config.is_some();
+        let script_logs: Arc<Mutex<Vec<LogEntry>>> = Arc::new(Mutex::new(Vec::with_capacity(64)));
+        let logs_for_api = Arc::clone(&script_logs);
+        let collector = Arc::new(PatchCollector::new());
 
-        // 过滤掉内部使用的特殊日志前缀
-        let filtered_logs: Vec<LogEntry> = result
-            .logs
-            .into_iter()
-            .filter(|log| !log.message.starts_with(CONFIG_RETURN_PREFIX))
-            .collect();
+        let result = sandboxed.ctx.with(|ctx| {
+            // 注册 API
+            self.register_api(&ctx, config, &collector, &logs_for_api, script_name)?;
 
-        WriteScriptResult {
-            logs: filtered_logs,
-            duration_us: result.duration_us,
-            success: result.success,
-            error: result.error,
-            patches: result.patches,
-            modified_config,
-            config_modified,
-        }
-    }
+            // 沙箱加固
+            let harden_result: std::result::Result<(), rquickjs::Error> =
+                ctx.eval(SANDBOX_HARDENING_JS);
+            if let Err(e) = harden_result {
+                tracing::warn!(
+                    target = "clash_prism_script",
+                    error = %e,
+                    "Sandbox hardening 执行失败。\
+                     基础防护（词法验证 + Rust 中断处理器）仍然有效。\
+                     错误详情: {}",
+                    e
+                );
+            }
 
-    /// 从日志中提取修改后的配置
-    ///
-    /// ## 安全考虑
-    ///
-    /// 使用反向遍历（`iter().rev()`）来防止用户脚本欺骗：
-    /// - 用户脚本可能提前输出 `__PRISM_MODIFIED_CONFIG__` 前缀来伪造配置
-    /// - 反向遍历确保我们优先使用 wrapper 脚本最后生成的配置记录
-    fn extract_modified_config_from_logs(logs: &[LogEntry]) -> Option<serde_json::Value> {
-        // 反向遍历日志，优先使用最后一条匹配的记录
-        // 这可以防止用户脚本通过提前输出相同前缀来欺骗系统
-        for log in logs.iter().rev() {
-            if let Some(json_str) = log.message.strip_prefix(CONFIG_RETURN_PREFIX) {
-                // 检查配置大小（在解析前进行初步检查）
-                if json_str.len() > MAX_MODIFIED_CONFIG_BYTES {
-                    tracing::warn!(
-                        target = "clash_prism_script",
-                        size = json_str.len(),
-                        max = MAX_MODIFIED_CONFIG_BYTES,
-                        "Modified config JSON exceeds size limit, ignoring"
-                    );
-                    return None;
-                }
+            // 包装脚本：返回 { success, error, config }
+            // user_body = 用户脚本 + write-back 模式的 main 调用逻辑
+            let user_body = format!(
+                r#"{}
+// write-back 模式：调用 main 函数并返回配置
+if (typeof main !== 'function') {{
+    log.error('Script must define a main(config) function for write-back mode');
+    return {{ success: false, error: 'Script must define a main(config) function' }};
+}}
+var __config_obj = config.get('');
+var __result = main(__config_obj);
+if (__result === null || typeof __result !== 'object' || Array.isArray(__result)) {{
+    log.error('main() must return a config object, got: ' + (Array.isArray(__result) ? 'array' : typeof __result));
+    return {{ success: false, error: 'main() must return a config object' }};
+}}
+return {{ success: true, config: __result }};"#,
+                script
+            );
+            let wrapped_script = build_wrapper_script(self.limits.max_recursion_depth, &user_body);
 
-                match serde_json::from_str::<serde_json::Value>(json_str) {
-                    Ok(config) => {
-                        // 基本验证：确保是对象
-                        if config.is_object() {
-                            return Some(config);
+            self.recursion_depth.fetch_add(1, Ordering::Relaxed);
+            let eval_result: std::result::Result<rquickjs::Value<'_>, rquickjs::Error> =
+                ctx.eval(wrapped_script.as_str());
+            self.recursion_depth.fetch_sub(1, Ordering::Relaxed);
+
+            // 检查中断
+            sandboxed.check_interrupts(self)?;
+
+            // 清理沙箱加固阶段保存的临时全局变量
+            let _: std::result::Result<(), rquickjs::Error> = ctx.eval(SANDBOX_CLEANUP_JS);
+
+            // 解析 eval_result：execute_with_write 还提取 config
+            match eval_result {
+                Ok(val) => {
+                    if let Some(obj) = val.as_object() {
+                        let success = obj.get::<_, bool>("success").unwrap_or(false);
+                        if !success {
+                            let error = obj.get::<_, String>("error").unwrap_or_default();
+                            return Err(error);
                         }
-                        tracing::warn!(
-                            target = "clash_prism_script",
-                            "Modified config is not a JSON object, ignoring"
-                        );
+                        // 读取配置：直接将 JS 对象转换为 JSON 字符串
+                        let config_val = obj.get::<_, rquickjs::Value>("config");
+                        if let Ok(cv) = config_val
+                            && cv.is_object()
+                        {
+                            // 使用 QuickJS API 直接调用 JSON.stringify，不污染全局命名空间
+                            let json_obj: rquickjs::Object = ctx
+                                .globals()
+                                .get("JSON")
+                                .map_err(|e| format!("无法获取 JSON 对象: {}", e))?;
+                            let stringify: rquickjs::Function = json_obj
+                                .get("stringify")
+                                .map_err(|e| format!("无法获取 JSON.stringify 函数: {}", e))?;
+                            let json_str: String = stringify
+                                .call((cv,))
+                                .map_err(|e| format!("配置对象序列化失败: {}", e))?;
+                            if json_str.len() > self.limits.max_config_bytes {
+                                return Err(format!(
+                                    "修改后的配置大小 ({} 字节) 超过限制 ({} 字节)",
+                                    json_str.len(),
+                                    self.limits.max_config_bytes
+                                ));
+                            }
+                            let parsed = serde_json::from_str(&json_str)
+                                .map_err(|e| format!("配置 JSON 解析失败: {}", e))?;
+                            return Ok(Some(parsed));
+                        }
+                        return Ok(None);
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            target = "clash_prism_script",
-                            error = %e,
-                            "Failed to parse modified config from script output"
-                        );
-                    }
+                    Ok(None)
+                }
+                Err(e) => Err(format!("JS 执行错误: {}", e)),
+            }
+        });
+
+        // 停止超时线程
+        let duration_us = sandboxed.shutdown();
+        let patches = collector.drain_patches();
+
+        match result {
+            Ok(modified_config) => {
+                let mut script_logs = self.drain_logs(&script_logs);
+
+                // 成功时追加日志
+                script_logs.push(LogEntry {
+                    level: LogLevel::Info,
+                    message: format!("Script '{}' executed successfully", script_name),
+                    timestamp: Utc::now(),
+                });
+
+                // 比较实际内容判断是否真正修改了配置
+                let config_modified = modified_config
+                    .as_ref()
+                    .map(|modified| modified != config)
+                    .unwrap_or(false);
+
+                WriteScriptResult {
+                    logs: script_logs,
+                    duration_us,
+                    success: true,
+                    error: None,
+                    patches,
+                    modified_config,
+                    config_modified,
+                }
+            }
+            Err(msg) => {
+                tracing::error!("Script '{}' failed: {}", script_name, msg);
+                let script_logs = self.drain_logs(&script_logs);
+                WriteScriptResult {
+                    logs: script_logs,
+                    duration_us,
+                    success: false,
+                    error: Some(msg),
+                    patches,
+                    modified_config: None,
+                    config_modified: false,
                 }
             }
         }
-        None
     }
 
     /// Validate script static security (without executing it).
