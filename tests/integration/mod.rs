@@ -8,6 +8,7 @@
 //!
 //! 所有 fixture 文件位于 `tests/fixtures/` 目录。
 
+mod script_write_integration;
 mod smart_selector;
 
 // NOTE: 使用 `include!` 而非 `mod` 声明引用共享测试辅助代码。
