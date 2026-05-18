@@ -25,6 +25,13 @@ use crate::api::{KvStore, PatchCollector, ScriptContext};
 use crate::limits::ScriptLimits;
 use crate::sandbox::SandboxConfig;
 
+/// 修改后配置的最大大小（10 MB）
+/// 防止脚本返回过大的配置导致内存问题
+const MAX_MODIFIED_CONFIG_BYTES: usize = 10 * 1024 * 1024;
+
+/// 内部使用的配置返回日志前缀
+const CONFIG_RETURN_PREFIX: &str = "__PRISM_MODIFIED_CONFIG__";
+
 /// 脚本执行结果
 #[derive(Debug)]
 pub struct ScriptResult {
@@ -42,6 +49,33 @@ pub struct ScriptResult {
 
     /// 脚本生成的 Patch 列表（通过 ctx.patch.add() 注册）
     pub patches: Vec<clash_prism_core::ir::Patch>,
+}
+
+/// 带配置写回的脚本执行结果
+///
+/// 用于 `execute_with_write()` 方法，允许脚本修改配置并返回修改后的配置。
+#[derive(Debug)]
+pub struct WriteScriptResult {
+    /// 日志输出
+    pub logs: Vec<LogEntry>,
+
+    /// 执行耗时（微秒）
+    pub duration_us: u64,
+
+    /// 是否成功
+    pub success: bool,
+
+    /// 错误信息（如果失败）
+    pub error: Option<String>,
+
+    /// 脚本生成的 Patch 列表
+    pub patches: Vec<clash_prism_core::ir::Patch>,
+
+    /// 修改后的配置（如果脚本返回了配置对象）
+    pub modified_config: Option<serde_json::Value>,
+
+    /// 配置是否被实际修改
+    pub config_modified: bool,
 }
 
 /// 日志条目
@@ -654,6 +688,165 @@ impl ScriptRuntime {
                 }
             }
         }
+    }
+
+    /// 执行脚本并允许返回修改后的配置
+    ///
+    /// 这是一个高权限操作，脚本必须定义 `main(config)` 函数并返回修改后的配置对象。
+    ///
+    /// ## 安全机制
+    ///
+    /// 1. **脚本格式要求**：脚本必须定义 `main(config)` 函数
+    /// 2. **沙箱执行**：继承 `execute()` 的所有安全限制
+    /// 3. **输出验证**：验证返回的配置是有效的 JSON 对象
+    /// 4. **大小限制**：修改后的配置不能超过 `max_config_bytes`
+    ///
+    /// ## Arguments
+    /// * `script` - JavaScript 源代码（必须定义 `main(config)` 函数）
+    /// * `script_name` - 脚本名称（用于来源追踪）
+    /// * `config` - 当前配置（JSON，将被传递给 `main()` 函数）
+    ///
+    /// ## Returns
+    /// `WriteScriptResult` 包含执行结果和修改后的配置
+    ///
+    /// ## Example
+    ///
+    /// ```javascript
+    /// // 脚本必须定义 main 函数
+    /// function main(config) {
+    ///     // 修改配置
+    ///     config['mixed-port'] = 7890;
+    ///     // 必须返回配置对象
+    ///     return config;
+    /// }
+    /// ```
+    pub fn execute_with_write(
+        &self,
+        script: &str,
+        script_name: &str,
+        config: &serde_json::Value,
+    ) -> WriteScriptResult {
+        // 包装用户脚本以捕获返回的配置
+        // 使用 config.get('') 获取完整配置对象，传递给用户的 main 函数
+        let wrapped_script = format!(
+            r"
+{script}
+
+// Prism write-back wrapper: capture and validate returned config
+if (typeof main !== 'function') {{
+    log.error('Script must define a main(config) function for write-back mode');
+}} else {{
+    try {{
+        // 获取完整配置对象 (空字符串获取整个配置)
+        var __config_obj = config.get('');
+        // 调用用户的 main 函数
+        var __prism_result = main(__config_obj);
+        if (__prism_result === null || typeof __prism_result !== 'object') {{
+            log.error('main() must return a config object, got: ' + typeof __prism_result);
+        }} else {{
+            // 将修改后的配置序列化并通过特殊日志前缀传递给 Rust
+            log.info('__PRISM_MODIFIED_CONFIG__' + JSON.stringify(__prism_result));
+        }}
+    }} catch (e) {{
+        log.error('main() execution failed: ' + String(e.stack || e.message || e));
+    }}
+}}
+"
+        );
+
+        // 使用现有的 execute 方法执行包装后的脚本
+        // 对于 write-back 模式，我们需要更大的输出限制来容纳配置
+        let result = self.execute(&wrapped_script, script_name, config);
+
+        // 从日志中提取修改后的配置（反向遍历，优先使用最后一条匹配的记录）
+        // 反向遍历可以防止用户脚本通过提前输出相同前缀来欺骗系统
+        let modified_config = Self::extract_modified_config_from_logs(&result.logs);
+
+        // 验证修改后的配置大小
+        if let Some(ref config) = modified_config {
+            let config_size = serde_json::to_string(config).map(|s| s.len()).unwrap_or(0);
+            if config_size > MAX_MODIFIED_CONFIG_BYTES {
+                return WriteScriptResult {
+                    logs: result.logs,
+                    duration_us: result.duration_us,
+                    success: false,
+                    error: Some(format!(
+                        "Modified config too large: {} bytes (max {})",
+                        config_size, MAX_MODIFIED_CONFIG_BYTES
+                    )),
+                    patches: result.patches,
+                    modified_config: None,
+                    config_modified: false,
+                };
+            }
+        }
+
+        // 判断配置是否被修改
+        let config_modified = modified_config.is_some();
+
+        // 过滤掉内部使用的特殊日志前缀
+        let filtered_logs: Vec<LogEntry> = result
+            .logs
+            .into_iter()
+            .filter(|log| !log.message.starts_with(CONFIG_RETURN_PREFIX))
+            .collect();
+
+        WriteScriptResult {
+            logs: filtered_logs,
+            duration_us: result.duration_us,
+            success: result.success,
+            error: result.error,
+            patches: result.patches,
+            modified_config,
+            config_modified,
+        }
+    }
+
+    /// 从日志中提取修改后的配置
+    ///
+    /// ## 安全考虑
+    ///
+    /// 使用反向遍历（`iter().rev()`）来防止用户脚本欺骗：
+    /// - 用户脚本可能提前输出 `__PRISM_MODIFIED_CONFIG__` 前缀来伪造配置
+    /// - 反向遍历确保我们优先使用 wrapper 脚本最后生成的配置记录
+    fn extract_modified_config_from_logs(logs: &[LogEntry]) -> Option<serde_json::Value> {
+        // 反向遍历日志，优先使用最后一条匹配的记录
+        // 这可以防止用户脚本通过提前输出相同前缀来欺骗系统
+        for log in logs.iter().rev() {
+            if let Some(json_str) = log.message.strip_prefix(CONFIG_RETURN_PREFIX) {
+                // 检查配置大小（在解析前进行初步检查）
+                if json_str.len() > MAX_MODIFIED_CONFIG_BYTES {
+                    tracing::warn!(
+                        target = "clash_prism_script",
+                        size = json_str.len(),
+                        max = MAX_MODIFIED_CONFIG_BYTES,
+                        "Modified config JSON exceeds size limit, ignoring"
+                    );
+                    return None;
+                }
+
+                match serde_json::from_str::<serde_json::Value>(json_str) {
+                    Ok(config) => {
+                        // 基本验证：确保是对象
+                        if config.is_object() {
+                            return Some(config);
+                        }
+                        tracing::warn!(
+                            target = "clash_prism_script",
+                            "Modified config is not a JSON object, ignoring"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target = "clash_prism_script",
+                            error = %e,
+                            "Failed to parse modified config from script output"
+                        );
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Validate script static security (without executing it).

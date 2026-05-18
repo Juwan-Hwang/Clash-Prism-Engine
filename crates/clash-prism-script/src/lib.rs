@@ -24,5 +24,5 @@ pub mod runtime;
 pub mod sandbox;
 
 pub use api::{KvStore, PatchCollector, ScriptContext};
-pub use runtime::{ScriptResult, ScriptRuntime};
+pub use runtime::{LogEntry, LogLevel, ScriptResult, ScriptRuntime, WriteScriptResult};
 pub use sandbox::SandboxConfig;

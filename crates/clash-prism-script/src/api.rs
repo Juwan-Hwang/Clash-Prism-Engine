@@ -1392,8 +1392,8 @@ impl PrismApi {
             move |ctx, key: Option<String>| -> RjsResult<Value<'js>> {
                 let cfg_read = config.lock().unwrap_or_else(|e| e.into_inner());
                 let result = match key {
-                    Some(k) => resolve_path(&cfg_read, &k),
-                    None => cfg_read.clone(),
+                    Some(k) if !k.is_empty() => resolve_path(&cfg_read, &k),
+                    _ => cfg_read.clone(),
                 };
                 drop(cfg_read);
                 json_value_to_rquickjs(&result, &ctx)
