@@ -163,8 +163,8 @@ fn integration_script_error_isolation() {
     "#;
     
     let result2 = runtime.execute_with_write(script2, "error-script", &result1.modified_config.unwrap());
-    // 错误被 wrapper 捕获，执行成功但配置未修改
-    assert!(result2.success);
+    // 新实现：脚本抛出异常会导致执行失败
+    assert!(!result2.success);
     assert!(!result2.config_modified);
     
     // 脚本 3: 应该能继续正常执行
