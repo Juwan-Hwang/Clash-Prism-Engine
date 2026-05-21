@@ -1,6 +1,6 @@
 //! Fuzz target: YAML Round-Trip
 //!
-//! Fuzzes the YAML parsing pipeline: raw bytes → serde_yml::Value → serde_json::Value.
+//! Fuzzes the YAML parsing pipeline: raw bytes → serde_yaml_ng::Value → serde_json::Value.
 //! This catches edge cases in YAML deserialization and type conversion.
 //!
 //! ## Run
@@ -17,7 +17,7 @@ fuzz_target!(|data: &[u8]| {
     let input = String::from_utf8_lossy(data);
 
     // Step 1: Parse as YAML
-    let yaml_value: Result<serde_yml::Value, _> = serde_yml::from_str(&input);
+    let yaml_value: Result<serde_yaml_ng::Value, _> = serde_yaml_ng::from_str(&input);
     let yaml_value = match yaml_value {
         Ok(v) => v,
         Err(_) => return, // Invalid YAML is expected for fuzz input
@@ -30,5 +30,5 @@ fuzz_target!(|data: &[u8]| {
     let _ = serde_json::to_string(&json_value);
 
     // Step 4: Round-trip YAML → JSON → YAML (should never panic)
-    let _ = serde_yml::to_string(&yaml_value);
+    let _ = serde_yaml_ng::to_string(&yaml_value);
 });

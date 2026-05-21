@@ -161,7 +161,7 @@ pub enum DependencyRef {
 ///
 /// ## 设计说明
 ///
-/// 架构文档 §2.1 声明: "Patch Compiler 使用 serde_yml 的 Value 解析后提取 `$` 前缀键"
+/// 架构文档 §2.1 声明: "Patch Compiler 使用 serde_yaml_ng 的 Value 解析后提取 `$` 前缀键"
 /// 表达式编译（`$filter`/`$transform`/`$remove` 的 expr 字段）由 `clash-prism-script` crate 中的
 /// `executor/expr.rs` 模块在**运行时**完成，而非编译时。此结构体仅存储原始表达式字符串
 /// 和编译期提取的字段引用列表。

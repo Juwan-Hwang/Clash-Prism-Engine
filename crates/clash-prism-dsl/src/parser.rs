@@ -2,7 +2,7 @@
 //!
 //! ## 解析流程
 //!
-//! 1. 使用 serde_yml 读取 YAML 文件为 Value
+//! 1. 使用 serde_yaml_ng 读取 YAML 文件为 Value
 //! 2. 提取元数据（__when__、__after__）
 //! 3. 遍历每个顶层键，识别操作类型（$ 前缀键 vs 普通键）
 //! 4. 按 §2.4 固定执行顺序编译操作
@@ -62,11 +62,11 @@ impl DslParser {
     /// 从字符串解析 .prism.yaml 内容
     pub fn parse_str(content: &str, file_path: Option<PathBuf>) -> Result<Vec<Patch>> {
         // 1. 解析 YAML
-        let value: serde_yml::Value = serde_yml::from_str(content)?;
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(content)?;
 
-        // 2. 提取为 serde_yml::Mapping
+        // 2. 提取为 serde_yaml_ng::Mapping
         let mapping = match value {
-            serde_yml::Value::Mapping(m) => m,
+            serde_yaml_ng::Value::Mapping(m) => m,
             _ => {
                 return Err(PrismError::DslParse {
                     message: "Prism DSL file must be a YAML mapping (dict)".into(),
@@ -86,7 +86,7 @@ impl DslParser {
         let mut patches = Vec::new();
 
         // 分组：普通键路径 → 该路径下的所有操作
-        let mut path_groups: std::collections::BTreeMap<String, serde_yml::Mapping> =
+        let mut path_groups: std::collections::BTreeMap<String, serde_yaml_ng::Mapping> =
             std::collections::BTreeMap::new();
 
         for (key, val) in &mapping {
@@ -146,7 +146,7 @@ impl DslParser {
 
     /// 检查 `__when__` 唯一性（§2.3：一个文件只能有一个 `__when__`）
     fn check_when_uniqueness(
-        mapping: &serde_yml::Mapping,
+        mapping: &serde_yaml_ng::Mapping,
         file_path: &Option<PathBuf>,
     ) -> Result<()> {
         let when_count = mapping
@@ -167,8 +167,11 @@ impl DslParser {
     }
 
     /// 提取作用域（从 __when__ 元数据）
-    fn extract_scope(mapping: &serde_yml::Mapping, file_path: &Option<PathBuf>) -> Result<Scope> {
-        match mapping.get(serde_yml::Value::String(META_WHEN.into())) {
+    fn extract_scope(
+        mapping: &serde_yaml_ng::Mapping,
+        file_path: &Option<PathBuf>,
+    ) -> Result<Scope> {
+        match mapping.get(serde_yaml_ng::Value::String(META_WHEN.into())) {
             Some(when_val) => {
                 let when_map = when_val.as_mapping().ok_or_else(|| PrismError::DslParse {
                     message: "__when__ must be a mapping (dict)".into(),
@@ -187,15 +190,15 @@ impl DslParser {
 
     /// 提取依赖声明（从 __after__ 元数据）
     fn extract_after_dependencies(
-        mapping: &serde_yml::Mapping,
+        mapping: &serde_yaml_ng::Mapping,
         file_path: &Option<PathBuf>,
     ) -> Result<Vec<DependencyRef>> {
-        match mapping.get(serde_yml::Value::String(META_AFTER.into())) {
+        match mapping.get(serde_yaml_ng::Value::String(META_AFTER.into())) {
             Some(after_val) => match after_val {
-                serde_yml::Value::String(s) => {
+                serde_yaml_ng::Value::String(s) => {
                     Ok(vec![DependencyRef::FileName(s.as_str().to_string())])
                 }
-                serde_yml::Value::Sequence(seq) => {
+                serde_yaml_ng::Value::Sequence(seq) => {
                     let mut deps = vec![];
                     for item in seq {
                         if let Some(s) = item.as_str() {
@@ -219,10 +222,10 @@ impl DslParser {
     /// 返回文件级变量名到默认值的映射。这些默认值在编译时作为变量模板的兜底，
     /// 优先级低于 `PrismHost::get_variables()` 提供的运行时值。
     fn extract_variables(
-        mapping: &serde_yml::Mapping,
+        mapping: &serde_yaml_ng::Mapping,
         file_path: &Option<PathBuf>,
     ) -> Result<std::collections::HashMap<String, String>> {
-        match mapping.get(serde_yml::Value::String(META_VARS.into())) {
+        match mapping.get(serde_yaml_ng::Value::String(META_VARS.into())) {
             Some(vars_val) => {
                 let vars_map = vars_val.as_mapping().ok_or_else(|| PrismError::DslParse {
                     message: "`__vars__` must be a mapping (dict)".into(),
@@ -243,11 +246,11 @@ impl DslParser {
                             "`__vars__.{}` value must be a string, got {}",
                             name,
                             match val {
-                                serde_yml::Value::Number(_) => "number",
-                                serde_yml::Value::Bool(_) => "boolean",
-                                serde_yml::Value::Sequence(_) => "array",
-                                serde_yml::Value::Mapping(_) => "mapping",
-                                serde_yml::Value::Null => "null",
+                                serde_yaml_ng::Value::Number(_) => "number",
+                                serde_yaml_ng::Value::Bool(_) => "boolean",
+                                serde_yaml_ng::Value::Sequence(_) => "array",
+                                serde_yaml_ng::Value::Mapping(_) => "mapping",
+                                serde_yaml_ng::Value::Null => "null",
                                 _ => "other",
                             }
                         ),
@@ -272,10 +275,10 @@ impl DslParser {
         content: &str,
         file_path: Option<PathBuf>,
     ) -> Result<(Vec<Patch>, std::collections::HashMap<String, String>)> {
-        let value: serde_yml::Value = serde_yml::from_str(content)?;
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(content)?;
 
         let mapping = match value {
-            serde_yml::Value::Mapping(m) => m,
+            serde_yaml_ng::Value::Mapping(m) => m,
             _ => {
                 return Err(PrismError::DslParse {
                     message: "Prism DSL file must be a YAML mapping (dict)".into(),
@@ -291,7 +294,7 @@ impl DslParser {
         let file_vars = Self::extract_variables(&mapping, &file_path)?;
 
         let mut patches = Vec::new();
-        let mut path_groups: std::collections::BTreeMap<String, serde_yml::Mapping> =
+        let mut path_groups: std::collections::BTreeMap<String, serde_yaml_ng::Mapping> =
             std::collections::BTreeMap::new();
 
         for (key, val) in &mapping {
@@ -369,12 +372,12 @@ impl DslParser {
     /// （`$filter`、`$prepend` 等）可以共存于同一个路径组中。
     fn compile_path_group(
         path: &str,
-        ops_mapping: &serde_yml::Mapping,
+        ops_mapping: &serde_yaml_ng::Mapping,
         scope: &Scope,
         after_deps: &[DependencyRef],
         file_path: &Option<PathBuf>,
     ) -> Result<Option<Patch>> {
-        use serde_yml::Value;
+        use serde_yaml_ng::Value;
 
         // 检查是否有 $override（独占操作）
         if ops_mapping.contains_key(Value::String("$override".into())) {
@@ -959,11 +962,11 @@ fn skip_template_expr(chars: &[char], mut i: usize, result: &mut String) -> usiz
 // YAML ↔ JSON 转换工具
 // ──────────────────────────────────────────────────────
 
-/// 将 serde_yml::Value 转换为 serde_json::Value
+/// 将 serde_yaml_ng::Value 转换为 serde_json::Value
 ///
 /// 如果遇到 NaN 或 Infinity 浮点值，返回错误而非静默替换为 0。
 fn yaml_value_to_json(
-    yaml_val: &serde_yml::Value,
+    yaml_val: &serde_yaml_ng::Value,
 ) -> std::result::Result<serde_json::Value, String> {
     yaml_value_to_json_inner(yaml_val, 0)
 }
@@ -973,7 +976,7 @@ const MAX_YAML_TO_JSON_DEPTH: usize = 10;
 
 /// `yaml_value_to_json` 的内部递归实现，带深度跟踪。
 fn yaml_value_to_json_inner(
-    yaml_val: &serde_yml::Value,
+    yaml_val: &serde_yaml_ng::Value,
     depth: usize,
 ) -> std::result::Result<serde_json::Value, String> {
     if depth > MAX_YAML_TO_JSON_DEPTH {
@@ -990,9 +993,9 @@ fn yaml_value_to_json_inner(
     }
 
     match yaml_val {
-        serde_yml::Value::Null => Ok(serde_json::Value::Null),
-        serde_yml::Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
-        serde_yml::Value::Number(n) => {
+        serde_yaml_ng::Value::Null => Ok(serde_json::Value::Null),
+        serde_yaml_ng::Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
+        serde_yaml_ng::Value::Number(n) => {
             // 尝试转为 i64 或 f64
             if let Some(i) = n.as_i64() {
                 Ok(serde_json::Value::Number(serde_json::Number::from(i)))
@@ -1021,15 +1024,15 @@ fn yaml_value_to_json_inner(
                 Ok(serde_json::Value::Null)
             }
         }
-        serde_yml::Value::String(s) => Ok(serde_json::Value::String(s.clone())),
-        serde_yml::Value::Sequence(arr) => {
+        serde_yaml_ng::Value::String(s) => Ok(serde_json::Value::String(s.clone())),
+        serde_yaml_ng::Value::Sequence(arr) => {
             let json_arr: std::result::Result<Vec<_>, String> = arr
                 .iter()
                 .map(|v| yaml_value_to_json_inner(v, depth + 1))
                 .collect();
             Ok(serde_json::Value::Array(json_arr?))
         }
-        serde_yml::Value::Mapping(map) => {
+        serde_yaml_ng::Value::Mapping(map) => {
             let mut json_map = serde_json::Map::new();
             for (k, v) in map {
                 if let Some(key_str) = k.as_str() {
@@ -1038,10 +1041,10 @@ fn yaml_value_to_json_inner(
             }
             Ok(serde_json::Value::Object(json_map))
         }
-        // serde_yml 0.9+ 引入了 Tagged 变体，尝试转换内部值
+        // serde_yaml_ng 0.9+ 引入了 Tagged 变体，尝试转换内部值
         // 注意：Tagged 值的转换可能导致递归（例如自引用的 Tagged 结构），
         // 因此使用深度限制防止无限循环
-        other => match serde_yml::to_value(other) {
+        other => match serde_yaml_ng::to_value(other) {
             Ok(v) => yaml_value_to_json_inner(&v, depth + 1),
             Err(e) => {
                 tracing::warn!(

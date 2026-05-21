@@ -17,7 +17,7 @@ clash-prism-plugin = { path = "../crates/clash-prism-plugin" }
 clash-prism-extension = { path = "../crates/clash-prism-extension", features = ["watcher"] }
 
 serde_json = { workspace = true }
-serde_yml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }

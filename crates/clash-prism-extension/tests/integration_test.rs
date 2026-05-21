@@ -129,7 +129,7 @@ fn base_config_yaml() -> String {
             "MATCH,DIRECT"
         ]
     });
-    serde_yml::to_string(&config).unwrap()
+    serde_yaml_ng::to_string(&config).unwrap()
 }
 
 /// test_apply_empty_workspace -- 空 prism 目录，apply 应返回空结果
@@ -221,7 +221,7 @@ rules:
 
     // 验证规则顺序和数量
     // $prepend 保持声明顺序
-    let output: serde_json::Value = serde_yml::from_str(&result.output_config).unwrap();
+    let output: serde_json::Value = serde_yaml_ng::from_str(&result.output_config).unwrap();
     let rules = output["rules"].as_array().unwrap();
     assert_eq!(rules.len(), 3, "应有 2 条 prepend + 1 条原始规则");
     assert_eq!(rules[0].as_str().unwrap(), "DOMAIN-SUFFIX,ad.com,REJECT");
@@ -725,7 +725,7 @@ rules:
             "MATCH,DIRECT"
         ]
     });
-    let config_yaml = serde_yml::to_string(&config).unwrap();
+    let config_yaml = serde_yaml_ng::to_string(&config).unwrap();
 
     let host = TestHost::new(&config_yaml, workspace);
     let ext = PrismExtension::new(host);

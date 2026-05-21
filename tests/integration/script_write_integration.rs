@@ -54,8 +54,8 @@ fn integration_script_patch_pipeline() {
     let modified_config = script_result.modified_config.expect("Should have modified config");
     
     // Step 2: 验证修改后的配置可以被序列化和反序列化
-    let config_yaml = serde_yml::to_string(&modified_config).expect("Should serialize to YAML");
-    let reparsed: serde_json::Value = serde_yml::from_str(&config_yaml).expect("Should parse back from YAML");
+    let config_yaml = serde_yaml_ng::to_string(&modified_config).expect("Should serialize to YAML");
+    let reparsed: serde_json::Value = serde_yaml_ng::from_str(&config_yaml).expect("Should parse back from YAML");
     
     assert_eq!(reparsed["port"], 9090);
     assert_eq!(reparsed["dns"]["enable"], true);

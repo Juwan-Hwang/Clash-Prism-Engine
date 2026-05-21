@@ -597,10 +597,10 @@ impl ConditionPrecompiler {
     ///
     /// 校验 __when__ 中声明的字段是否合法，
     /// 并返回一个结构化的 Scope 表示
-    pub fn compile_when(when: &serde_yml::Mapping) -> std::result::Result<Scope, CompileError> {
+    pub fn compile_when(when: &serde_yaml_ng::Mapping) -> std::result::Result<Scope, CompileError> {
         let mut builder = ScopedBuilder::new();
 
-        if let Some(core) = when.get(serde_yml::Value::String("core".into()))
+        if let Some(core) = when.get(serde_yaml_ng::Value::String("core".into()))
             && let Some(core_str) = core.as_str()
         {
             // Semantic validation: core field must be a known kernel name.
@@ -630,12 +630,12 @@ impl ConditionPrecompiler {
             builder = builder.core(normalized_core);
         }
 
-        if let Some(platform_val) = when.get(serde_yml::Value::String("platform".into())) {
+        if let Some(platform_val) = when.get(serde_yaml_ng::Value::String("platform".into())) {
             let platforms = match platform_val {
-                serde_yml::Value::String(s) => {
+                serde_yaml_ng::Value::String(s) => {
                     vec![parse_platform(s.as_str())?]
                 }
-                serde_yml::Value::Sequence(seq) => {
+                serde_yaml_ng::Value::Sequence(seq) => {
                     let mut result = vec![];
                     for item in seq {
                         if let Some(s) = item.as_str() {
@@ -653,10 +653,10 @@ impl ConditionPrecompiler {
             builder = builder.platform(platforms);
         }
 
-        if let Some(profile) = when.get(serde_yml::Value::String("profile".into())) {
+        if let Some(profile) = when.get(serde_yaml_ng::Value::String("profile".into())) {
             let profiles = match profile {
-                serde_yml::Value::String(s) => vec![s.as_str().to_string()],
-                serde_yml::Value::Sequence(seq) => seq
+                serde_yaml_ng::Value::String(s) => vec![s.as_str().to_string()],
+                serde_yaml_ng::Value::Sequence(seq) => seq
                     .iter()
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect(),
@@ -670,7 +670,7 @@ impl ConditionPrecompiler {
         }
 
         // Parse time condition
-        if let Some(time_val) = when.get(serde_yml::Value::String("time".into()))
+        if let Some(time_val) = when.get(serde_yaml_ng::Value::String("time".into()))
             && let Some(time_str) = time_val.as_str()
         {
             let time_range = crate::scope::TimeRange::parse(time_str)
@@ -679,7 +679,7 @@ impl ConditionPrecompiler {
         }
 
         // File-level enabled condition
-        if let Some(enabled_val) = when.get(serde_yml::Value::String("enabled".into())) {
+        if let Some(enabled_val) = when.get(serde_yaml_ng::Value::String("enabled".into())) {
             if let Some(enabled_bool) = enabled_val.as_bool() {
                 builder = builder.enabled(enabled_bool);
             } else {
@@ -691,7 +691,7 @@ impl ConditionPrecompiler {
         }
 
         // WiFi SSID condition
-        if let Some(ssid_val) = when.get(serde_yml::Value::String("ssid".into()))
+        if let Some(ssid_val) = when.get(serde_yaml_ng::Value::String("ssid".into()))
             && let Some(ssid_str) = ssid_val.as_str()
         {
             builder = builder.ssid(ssid_str);
@@ -1172,10 +1172,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_core_field() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("core".into()),
-            serde_yml::Value::String("mihomo".into()),
+            serde_yaml_ng::Value::String("core".into()),
+            serde_yaml_ng::Value::String("mihomo".into()),
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
@@ -1201,10 +1201,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_platform_invalid_string() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("platform".into()),
-            serde_yml::Value::String("freebsd".into()),
+            serde_yaml_ng::Value::String("platform".into()),
+            serde_yaml_ng::Value::String("freebsd".into()),
         );
         // "freebsd" is not a valid platform → error
         let result = ConditionPrecompiler::compile_when(&when);
@@ -1213,10 +1213,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_platform_valid() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("platform".into()),
-            serde_yml::Value::String("macos".into()),
+            serde_yaml_ng::Value::String("platform".into()),
+            serde_yaml_ng::Value::String("macos".into()),
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
@@ -1229,12 +1229,12 @@ mod tests {
 
     #[test]
     fn test_compile_when_platform_array() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("platform".into()),
-            serde_yml::Value::Sequence(vec![
-                serde_yml::Value::String("windows".into()),
-                serde_yml::Value::String("linux".into()),
+            serde_yaml_ng::Value::String("platform".into()),
+            serde_yaml_ng::Value::Sequence(vec![
+                serde_yaml_ng::Value::String("windows".into()),
+                serde_yaml_ng::Value::String("linux".into()),
             ]),
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
@@ -1249,10 +1249,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_profile() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("profile".into()),
-            serde_yml::Value::String("work".into()),
+            serde_yaml_ng::Value::String("profile".into()),
+            serde_yaml_ng::Value::String("work".into()),
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
@@ -1265,12 +1265,12 @@ mod tests {
 
     #[test]
     fn test_compile_when_profile_array() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("profile".into()),
-            serde_yml::Value::Sequence(vec![
-                serde_yml::Value::String("config".into()),
-                serde_yml::Value::String("subscribe".into()),
+            serde_yaml_ng::Value::String("profile".into()),
+            serde_yaml_ng::Value::Sequence(vec![
+                serde_yaml_ng::Value::String("config".into()),
+                serde_yaml_ng::Value::String("subscribe".into()),
             ]),
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
@@ -1287,10 +1287,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_time_valid() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("time".into()),
-            serde_yml::Value::String("09:00-17:00".into()),
+            serde_yaml_ng::Value::String("time".into()),
+            serde_yaml_ng::Value::String("09:00-17:00".into()),
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
@@ -1305,10 +1305,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_time_invalid_format() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("time".into()),
-            serde_yml::Value::String("not-a-time".into()),
+            serde_yaml_ng::Value::String("time".into()),
+            serde_yaml_ng::Value::String("not-a-time".into()),
         );
         let result = ConditionPrecompiler::compile_when(&when);
         assert!(result.is_err());
@@ -1316,10 +1316,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_enabled_bool() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("enabled".into()),
-            serde_yml::Value::Bool(false),
+            serde_yaml_ng::Value::String("enabled".into()),
+            serde_yaml_ng::Value::Bool(false),
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
@@ -1332,11 +1332,11 @@ mod tests {
 
     #[test]
     fn test_compile_when_enabled_string_warns_not_errors() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         // enabled as string "true" — should not error, just warn
         when.insert(
-            serde_yml::Value::String("enabled".into()),
-            serde_yml::Value::String("true".into()),
+            serde_yaml_ng::Value::String("enabled".into()),
+            serde_yaml_ng::Value::String("true".into()),
         );
         let scope = ConditionPrecompiler::compile_when(&when);
         // Should succeed (string enabled is warned, not errored)
@@ -1352,10 +1352,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_ssid() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("ssid".into()),
-            serde_yml::Value::String("HomeWiFi".into()),
+            serde_yaml_ng::Value::String("ssid".into()),
+            serde_yaml_ng::Value::String("HomeWiFi".into()),
         );
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
@@ -1368,7 +1368,7 @@ mod tests {
 
     #[test]
     fn test_compile_when_empty_mapping() {
-        let when = serde_yml::Mapping::new();
+        let when = serde_yaml_ng::Mapping::new();
         let scope = ConditionPrecompiler::compile_when(&when).unwrap();
         match scope {
             crate::scope::Scope::Scoped {
@@ -1392,10 +1392,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_platform_invalid_value() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("platform".into()),
-            serde_yml::Value::String("freebsd".into()),
+            serde_yaml_ng::Value::String("platform".into()),
+            serde_yaml_ng::Value::String("freebsd".into()),
         );
         let result = ConditionPrecompiler::compile_when(&when);
         assert!(result.is_err());
@@ -1405,10 +1405,10 @@ mod tests {
 
     #[test]
     fn test_compile_when_platform_wrong_type() {
-        let mut when = serde_yml::Mapping::new();
+        let mut when = serde_yaml_ng::Mapping::new();
         when.insert(
-            serde_yml::Value::String("platform".into()),
-            serde_yml::Value::Number(42.into()),
+            serde_yaml_ng::Value::String("platform".into()),
+            serde_yaml_ng::Value::Number(42.into()),
         );
         let result = ConditionPrecompiler::compile_when(&when);
         assert!(result.is_err());

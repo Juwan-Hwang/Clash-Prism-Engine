@@ -77,7 +77,7 @@ pub enum PrismError {
     Serialization(#[from] serde_json::Error),
 
     #[error("YAML 解析错误: {0}")]
-    YamlParse(#[from] serde_yml::Error),
+    YamlParse(#[from] serde_yaml_ng::Error),
 
     // ─── Output Errors (§4.6) ───
     #[error("配置输出失败: {message}")]

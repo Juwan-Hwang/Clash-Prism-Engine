@@ -536,9 +536,9 @@ impl TargetCompiler {
         let yaml_value = json_to_yaml_value(&adapted)?;
 
         // 3. 根据pretty设置选择输出格式
-        let yaml_str = serde_yml::to_string(&yaml_value)?;
+        let yaml_str = serde_yaml_ng::to_string(&yaml_value)?;
         if self.pretty {
-            // pretty 模式：保留 serde_yml 默认的多行格式化输出（缩进、换行等）
+            // pretty 模式：保留 serde_yaml_ng 默认的多行格式化输出（缩进、换行等）
             Ok(yaml_str)
         } else {
             // non-pretty 模式：压缩 YAML，去除多余空行，生成紧凑输出
@@ -737,44 +737,44 @@ fn field_mappings() -> &'static Vec<FieldMapping> {
     &MAPPINGS
 }
 
-/// 将 serde_json::Value 转换为 serde_yml::Value
+/// 将 serde_json::Value 转换为 serde_yaml_ng::Value
 ///
-/// 这是必要的中间步骤，因为 serde_yml 需要自己的 Value 类型来正确处理：
+/// 这是必要的中间步骤，因为 serde_yaml_ng 需要自己的 Value 类型来正确处理：
 /// - YAML 的 null vs JSON 的 null
 /// - 数字类型的表示差异
 /// - 键的排序和格式化
-fn json_to_yaml_value(json: &Value) -> Result<serde_yml::Value> {
+fn json_to_yaml_value(json: &Value) -> Result<serde_yaml_ng::Value> {
     match json {
-        Value::Null => Ok(serde_yml::Value::Null),
-        Value::Bool(b) => Ok(serde_yml::Value::Bool(*b)),
+        Value::Null => Ok(serde_yaml_ng::Value::Null),
+        Value::Bool(b) => Ok(serde_yaml_ng::Value::Bool(*b)),
         Value::Number(n) => {
             // 优先尝试整数表示，避免不必要的精度丢失：
             // i64 → u64 → f64，确保整数不会被转为浮点数
             if let Some(i) = n.as_i64() {
-                Ok(serde_yml::Value::Number(i.into()))
+                Ok(serde_yaml_ng::Value::Number(i.into()))
             } else if let Some(u) = n.as_u64() {
-                Ok(serde_yml::Value::Number(u.into()))
+                Ok(serde_yaml_ng::Value::Number(u.into()))
             } else if let Some(f) = n.as_f64() {
-                let yaml_num = serde_yml::Number::from(f);
-                Ok(serde_yml::Value::Number(yaml_num))
+                let yaml_num = serde_yaml_ng::Number::from(f);
+                Ok(serde_yaml_ng::Value::Number(yaml_num))
             } else {
-                Ok(serde_yml::Value::Null)
+                Ok(serde_yaml_ng::Value::Null)
             }
         }
-        Value::String(s) => Ok(serde_yml::Value::String(s.clone())),
+        Value::String(s) => Ok(serde_yaml_ng::Value::String(s.clone())),
         Value::Array(arr) => {
-            let yaml_arr: Result<Vec<serde_yml::Value>> =
+            let yaml_arr: Result<Vec<serde_yaml_ng::Value>> =
                 arr.iter().map(json_to_yaml_value).collect();
-            Ok(serde_yml::Value::Sequence(yaml_arr?))
+            Ok(serde_yaml_ng::Value::Sequence(yaml_arr?))
         }
         Value::Object(map) => {
-            let mut yaml_map = serde_yml::Mapping::new();
+            let mut yaml_map = serde_yaml_ng::Mapping::new();
             for (k, v) in map {
-                let key = serde_yml::Value::String(k.clone());
+                let key = serde_yaml_ng::Value::String(k.clone());
                 let value = json_to_yaml_value(v)?;
                 yaml_map.insert(key, value);
             }
-            Ok(serde_yml::Value::Mapping(yaml_map))
+            Ok(serde_yaml_ng::Value::Mapping(yaml_map))
         }
     }
 }
@@ -993,7 +993,7 @@ mod tests {
         assert!(yaml_output.contains("rules:"));
 
         // 验证可以反向解析（round-trip）
-        let parsed: serde_yml::Value = serde_yml::from_str(&yaml_output).unwrap();
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml_output).unwrap();
         assert!(parsed.get("mixed-port").is_some());
         assert!(parsed.get("dns").is_some());
     }
@@ -1090,7 +1090,7 @@ mod tests {
         });
 
         let result = compiler.compile(&config).unwrap();
-        let parsed: serde_yml::Value = serde_yml::from_str(&result).unwrap();
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&result).unwrap();
         let tun = &parsed["tun"];
         assert!(tun.get("device").is_none(), "tun.device 应被移除");
         assert!(

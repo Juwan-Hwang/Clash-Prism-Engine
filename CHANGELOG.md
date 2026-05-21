@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **serde_yml → serde_yaml_ng** — 将 YAML 依赖从已停止维护的 `serde_yml 0.0.12` 迁移到 `serde_yaml_ng 0.10`（API 完全兼容，活跃维护分支）。涉及 crate：core、dsl、script、extension
+
+### Fixed
+
+- **沙箱 constructor 锁定策略** — `runtime.rs` 中内置构造器原型链的 `constructor` 属性描述符从抛异常的 getter 改为只读锁定（`value: ctor, writable: false, configurable: false`），修复 `Array.prototype.concat`、`map`、`filter` 等标准方法因 constructor 访问被拒而失败的问题
+
 ### Performance
 
 - **bulk_items 摘要模式** — append/prepend 操作 ≥ 100 条时，`affected_items` 仅保留一条摘要，完整 item 描述存入 `Arc<[String]>` 共享字段，避免 `last_traces` clone 时的深拷贝开销。`extract_rule_annotations()` 自动适配两种模式

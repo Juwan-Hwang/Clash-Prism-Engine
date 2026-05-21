@@ -9,7 +9,7 @@ publish = false
 clash-prism-core = { path = "../crates/clash-prism-core" }
 clash-prism-dsl = { path = "../crates/clash-prism-dsl" }
 serde_json = { workspace = true }
-serde_yml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 # Fuzzing engine
 libfuzzer-sys = { version = "0.4", features = ["rustc-dep-of-std"] }

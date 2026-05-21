@@ -43,7 +43,7 @@ If you're building a mihomo / Clash GUI client (e.g., a Tauri app), embed Prism 
 
 ```toml
 [dependencies]
-clash-prism-extension = "0.1.2"
+clash-prism-extension = "0.1.8"
 ```
 
 Implement the `PrismHost` trait (4 required methods) to get full configuration management:

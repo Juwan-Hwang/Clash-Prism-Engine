@@ -205,7 +205,7 @@ impl DefaultPipeline {
             }
             std::fs::read_to_string(&output_path)
                 .ok()
-                .and_then(|s| serde_yml::from_str(&s).ok())
+                .and_then(|s| serde_yaml_ng::from_str(&s).ok())
                 .unwrap_or(serde_json::json!({}))
         });
         Self {

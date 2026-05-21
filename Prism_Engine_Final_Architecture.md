@@ -48,8 +48,8 @@
 
 ### 2.1 设计原则
 
-- 操作符以 `$` 开头，作为标准 YAML 映射键名使用（如 `$prepend:`）。`$` 是合法的 YAML 键名字符，所有工具链（yamllint / prettier / serde_yml / yq）均兼容。
-- **Patch Compiler** 使用 `serde_yml` 的 `Value` 解析后提取 `$` 前缀键。由于 `$` 是标准字符串键名，无需自定义 YAML 解析层，`serde_yml` 直接解析即可。
+- 操作符以 `$` 开头，作为标准 YAML 映射键名使用（如 `$prepend:`）。`$` 是合法的 YAML 键名字符，所有工具链（yamllint / prettier / serde_yaml_ng / yq）均兼容。
+- **Patch Compiler** 使用 `serde_yaml_ng` 的 `Value` 解析后提取 `$` 前缀键。由于 `$` 是标准字符串键名，无需自定义 YAML 解析层，`serde_yaml_ng` 直接解析即可。
 - 通过 JSON Schema（配合 `# yaml-language-server: $schema=...` 头部注释）提供**自动补全和语法校验**
 - 多个操作合并到**同一个键**下，避免 YAML 重复键问题
 - `$filter` / `$transform` 表达式只能引用**静态字段**
@@ -157,7 +157,7 @@ rules:
 
 > **一个 `.prism.yaml` 文件只能有一个 `__when__` 声明。需要多个条件作用域时，使用多个文件。**
 
-**原因**：YAML 规范对重复键的行为未作定义，不同解析器处理方式不同——yamllint 和 serde_yml 会直接报错，部分解析器会静默覆盖后者。无论哪种结果都不是用户期望的行为，因此 Prism 在编译阶段会主动检测并拒绝含有重复 `__when__` 的文件。
+**原因**：YAML 规范对重复键的行为未作定义，不同解析器处理方式不同——yamllint 和 serde_yaml_ng 会直接报错，部分解析器会静默覆盖后者。无论哪种结果都不是用户期望的行为，因此 Prism 在编译阶段会主动检测并拒绝含有重复 `__when__` 的文件。
 
 **推荐实践**：按功能拆分文件，文件名编码执行顺序：
 
@@ -1437,7 +1437,7 @@ println!("{}", tracker.report());
 | 脚本引擎 | rquickjs (quickjs-ng) | 预生成 bindings、ES2023+、无需用户端 C 编译 |
 | KV 存储 | redb | 纯 Rust、ACID、嵌入式 |
 | 异步运行时 | tokio | Rust 标准异步框架 |
-| 序列化 | serde + serde_yml | YAML/JSON 处理 |
+| 序列化 | serde + serde_yaml_ng | YAML/JSON 处理 |
 | 定时任务 | tokio-cron-scheduler | Cron 表达式调度 |
 | 构建工具 | Vite (前端) + Cargo (后端) | 快速、成熟 |
 

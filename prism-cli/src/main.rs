@@ -474,7 +474,7 @@ fn cmd_run(script: PathBuf, config_file: Option<PathBuf>) -> Result<(), String> 
             if p.extension().is_some_and(|e| e == "json") {
                 serde_json::from_str(&s).map_err(|e| format!("JSON 解析失败: {}", e))?
             } else {
-                serde_yml::from_str(&s).map_err(|e| format!("YAML 解析失败: {}", e))?
+                serde_yaml_ng::from_str(&s).map_err(|e| format!("YAML 解析失败: {}", e))?
             }
         }
         None => serde_json::json!({}),

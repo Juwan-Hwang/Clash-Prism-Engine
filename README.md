@@ -43,7 +43,7 @@ Prism Engine 有两种使用方式：
 
 ```toml
 [dependencies]
-clash-prism-extension = "0.1.2"
+clash-prism-extension = "0.1.8"
 ```
 
 实现 `PrismHost` trait（4 个必须方法），即可获得完整的配置管理能力：

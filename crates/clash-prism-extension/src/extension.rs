@@ -150,7 +150,7 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         // Step 1: 读取当前运行配置
         let config_str = self.host.read_running_config()?;
         let base_config: serde_json::Value =
-            serde_yml::from_str(&config_str).map_err(|e| format!("配置解析失败: {}", e))?;
+            serde_yaml_ng::from_str(&config_str).map_err(|e| format!("配置解析失败: {}", e))?;
 
         // Step 2: 获取 Prism 工作目录并扫描文件
         let workspace = self.host.get_prism_workspace()?;
@@ -161,8 +161,8 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
         let output_config = std::sync::Arc::new(raw_output);
 
         // Step 4: 序列化输出配置
-        let output_yaml =
-            serde_yml::to_string(&*output_config).map_err(|e| format!("配置序列化失败: {}", e))?;
+        let output_yaml = serde_yaml_ng::to_string(&*output_config)
+            .map_err(|e| format!("配置序列化失败: {}", e))?;
 
         // Step 5: 提取规则注解
         let rule_annotations = extract_rule_annotations(&traces, &output_config);
@@ -389,7 +389,7 @@ impl<H: PrismHost + 'static> PrismExtension<H> {
 
         // Write back via host
         let output_yaml =
-            serde_yml::to_string(&output).map_err(|e| format!("配置序列化失败: {}", e))?;
+            serde_yaml_ng::to_string(&output).map_err(|e| format!("配置序列化失败: {}", e))?;
         self.host.apply_config(&output_yaml)?;
 
         // Invalidate internal state so getters re-derive from updated output.

@@ -1,7 +1,7 @@
 [package]
 name = "clash-prism-script"
 description = "Script engine with rquickjs sandbox for Prism Engine"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,7 +13,7 @@ default = []
 persist-store = ["dep:redb"]
 
 [dependencies]
-clash-prism-core = { version = "0.1.0" }
+clash-prism-core = { version = "0.1.5" }
 rquickjs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

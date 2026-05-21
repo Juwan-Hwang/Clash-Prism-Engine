@@ -1,6 +1,6 @@
 [package]
 name = "clash-prism-extension"
-version = "0.1.7"
+version = "0.1.8"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -9,13 +9,13 @@ repository.workspace = true
 description = "UI Extension interface for integrating Prism Engine into Mihomo GUI clients"
 
 [dependencies]
-clash-prism-core = { version = "0.1.3" }
-clash-prism-dsl = { version = "0.1.2" }
+clash-prism-core = { version = "0.1.5" }
+clash-prism-dsl = { version = "0.1.4" }
 regex = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 notify = { workspace = true, optional = true }
