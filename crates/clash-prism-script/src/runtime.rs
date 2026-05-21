@@ -141,7 +141,8 @@ const SANDBOX_HARDENING_JS: &str = r#"
                             var ctor = globalThis[builtins[i]];
                             if (typeof ctor === 'function' && ctor.prototype) {
                                 Object.defineProperty(ctor.prototype, 'constructor', {
-                                    get: function() { throw new Error('Sandbox: constructor access denied'); },
+                                    value: ctor,
+                                    writable: false,
                                     configurable: false
                                 });
                             }
